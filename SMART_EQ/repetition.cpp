@@ -190,11 +190,11 @@ namespace
             if (!coarseCompareFragments(
                 audio,
                 first,
-                second,
+                static_cast<size_t>(alignedSecond),
                 windowFrames,
                 settings.minCorrelation))
             {
-                return false;
+                continue;
             }
 
             double dot[2] = {};
@@ -557,7 +557,7 @@ bool separateRepeatedComponents(
                     );
 
             if (rangeOverlaps(occupiedRanges, first, windowFrames) ||
-                rangeOverlaps(occupiedRanges, second, windowFrames))
+                rangeOverlaps(occupiedRanges, alignedSecond, windowFrames))
             {
                 continue;
             }
