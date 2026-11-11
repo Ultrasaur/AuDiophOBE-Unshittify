@@ -151,7 +151,8 @@ PeakReductionPlan planPeakReduction(
     double ceilingDb,
     double fadeMs,
     size_t graphColumns,
-    const ProgressCallback& progress = {});
+    const ProgressCallback& progress = {},
+    const AudioData* fixedComponents = nullptr);
 
 void applyPeakReduction(
     AudioData& audio,
@@ -220,7 +221,8 @@ BandReductionPlan planBandReduction(
     double referenceReleaseMs,
     size_t graphColumns,
     size_t chunkFrames,
-    const ProgressCallback& progress = {});
+    const ProgressCallback& progress = {},
+    const AudioData* fixedComponents = nullptr);
 
 void applyBandReduction(
     AudioData& audio,
