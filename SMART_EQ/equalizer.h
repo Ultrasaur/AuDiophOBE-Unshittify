@@ -12,6 +12,7 @@
 
 using ProgressCallback = std::function<void(int)>;
 
+#include "better_declipper.h"
 #include "fft.h"
 #include "profiles.h"
 
@@ -166,6 +167,7 @@ struct DeclipResult
     std::uint64_t legacySkippedOverlapRuns = 0;
     std::uint64_t legacySkippedOverlapSamples = 0;
     std::vector<SmearedCeilingDiagnostic> smearedCeilings;
+    BetterDeclipper::DetectionResult betterDetection;
     std::vector<DeclipSegment> segments;
 };
 
