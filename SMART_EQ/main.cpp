@@ -492,6 +492,7 @@ struct ProgressReporter
 
         wstring output = message.str();
 
+        // Rewrite the progress line once and clear any leftover characters.
         wcout << L"\r" << output;
 
         if (previousLength > output.length())
@@ -500,8 +501,7 @@ struct ProgressReporter
         }
 
         previousLength = output.length();
-
-        wcout << L"\r" << output << flush;
+        wcout << flush;
     }
 
     // Новый этап обработки файла
@@ -1057,8 +1057,7 @@ int main()
 
                 RepetitionSettings repetitionSettings;
                 string repetitionError;
-
-                progress.clearLine();
+                string repetitionDiagnostics;
 
                 const bool repetitionReady = separateRepeatedComponents(
                     originalAudio,
@@ -1066,8 +1065,17 @@ int main()
                     residualAudio,
                     repetitionSettings,
                     repetitions,
-                    repetitionError
+                    repetitionError,
+                    repetitionDiagnostics
                 );
+
+                if (!repetitionDiagnostics.empty())
+                {
+                    progress.note(wstring(
+                        repetitionDiagnostics.begin(),
+                        repetitionDiagnostics.end()
+                    ));
+                }
 
                 if (repetitionReady && repetitions.groups > 0)
                 {
