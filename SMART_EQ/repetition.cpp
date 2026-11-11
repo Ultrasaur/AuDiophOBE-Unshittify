@@ -179,31 +179,54 @@ namespace
         };
 
         constexpr size_t bestCandidateCount = 3;
+        std::array<CoarseCandidate, bestCandidateCount> coarseSeeds{};
         std::array<CoarseCandidate, bestCandidateCount> bestCandidates{};
 
         const size_t shiftStep =
             std::max<size_t>(1, audio.sampleRate / 8000);
+
+        // Первый проход проверяет смещения вдвое реже.
+        const size_t coarseShiftStep = shiftStep * 2;
 
         coarsePassed = false;
         fullPassed = false;
         bool found = false;
         bestScore = -1.0;
 
-        // Этап 1. Быстро проверяем все допустимые смещения
-        // и сохраняем только три лучших по предварительной корреляции.
+        // Вставляет результат в массив трёх лучших кандидатов.
+        auto insertCandidate =
+            [](std::array<CoarseCandidate, bestCandidateCount>& candidates,
+                int offset,
+                double score)
+        {
+            for (size_t i = 0; i < bestCandidateCount; ++i)
+            {
+                if (score > candidates[i].score)
+                {
+                    for (size_t j = bestCandidateCount - 1; j > i; --j)
+                        candidates[j] = candidates[j - 1];
+
+                    candidates[i].offset = offset;
+                    candidates[i].score = score;
+                    break;
+                }
+            }
+        };
+
+        // Этап 1. Редкий предварительный поиск.
         for (int offset = -static_cast<int>(maxShift);
             offset <= static_cast<int>(maxShift);
-            offset += static_cast<int>(shiftStep))
+            offset += static_cast<int>(coarseShiftStep))
         {
             const long long alignedSecond =
                 static_cast<long long>(second) + offset;
 
-            if (alignedSecond < 0)
-                continue;
-
-            if (static_cast<uint64_t>(alignedSecond) +
+            if (alignedSecond < 0 ||
+                static_cast<uint64_t>(alignedSecond) +
                 windowFrames > audio.frameCount)
+            {
                 continue;
+            }
 
             double coarseScore = 0.0;
 
@@ -219,25 +242,88 @@ namespace
             }
 
             coarsePassed = true;
-
-            for (size_t i = 0; i < bestCandidateCount; ++i)
-            {
-                if (coarseScore > bestCandidates[i].score)
-                {
-                    for (size_t j = bestCandidateCount - 1; j > i; --j)
-                        bestCandidates[j] = bestCandidates[j - 1];
-
-                    bestCandidates[i].offset = offset;
-                    bestCandidates[i].score = coarseScore;
-                    break;
-                }
-            }
+            insertCandidate(coarseSeeds, offset, coarseScore);
         }
 
         if (!coarsePassed)
             return false;
 
-        // Этап 2. Полное сравнение наиболее перспективных смещений.
+        // Этап 2. Уточняем область вокруг каждого из трёх
+        // лучших смещений с прежним, более точным шагом.
+        // Уже проверенные смещения повторно не обрабатываются.
+        std::array<int, 32> testedOffsets{};
+        size_t testedOffsetCount = 0;
+
+        for (const CoarseCandidate& seed : coarseSeeds)
+        {
+            if (seed.score < 0.0)
+                continue;
+
+            insertCandidate(bestCandidates, seed.offset, seed.score);
+            testedOffsets[testedOffsetCount++] = seed.offset;
+        }
+
+        for (const CoarseCandidate& seed : coarseSeeds)
+        {
+            if (seed.score < 0.0)
+                continue;
+
+            for (int delta = -static_cast<int>(coarseShiftStep);
+                delta <= static_cast<int>(coarseShiftStep);
+                delta += static_cast<int>(shiftStep))
+            {
+                const int offset = seed.offset + delta;
+
+                if (offset < -static_cast<int>(maxShift) ||
+                    offset > static_cast<int>(maxShift))
+                {
+                    continue;
+                }
+
+                bool alreadyTested = false;
+
+                for (size_t i = 0; i < testedOffsetCount; ++i)
+                {
+                    if (testedOffsets[i] == offset)
+                    {
+                        alreadyTested = true;
+                        break;
+                    }
+                }
+
+                if (alreadyTested)
+                    continue;
+
+                testedOffsets[testedOffsetCount++] = offset;
+
+                const long long alignedSecond =
+                    static_cast<long long>(second) + offset;
+
+                if (alignedSecond < 0 ||
+                    static_cast<uint64_t>(alignedSecond) +
+                    windowFrames > audio.frameCount)
+                {
+                    continue;
+                }
+
+                double coarseScore = 0.0;
+
+                if (!coarseCompareFragments(
+                    audio,
+                    first,
+                    static_cast<size_t>(alignedSecond),
+                    windowFrames,
+                    settings.minCorrelation,
+                    coarseScore))
+                {
+                    continue;
+                }
+
+                insertCandidate(bestCandidates, offset, coarseScore);
+            }
+        }
+
+        // Этап 3. Полное сравнение трёх лучших уточнённых смещений.
         for (const CoarseCandidate& candidate : bestCandidates)
         {
             if (candidate.score < 0.0)
