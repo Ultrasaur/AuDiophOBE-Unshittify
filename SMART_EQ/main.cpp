@@ -350,7 +350,7 @@ bool selectDeclip(EqualizerSettings& settings)
     }
 
     if (!readNumber(
-        L"  Peak ceiling after restoration, dBFS (Enter = -1): ",
+        L"  Reference peak ceiling for declipping, dBFS (Enter = -1): ",
         -1.0, -12.0, 0.0,
         settings.declipCeilingDb))
     {
@@ -365,6 +365,7 @@ bool selectDeclip(EqualizerSettings& settings)
         return false;
     }
 
+    wcout << L"    0 = preserve residual, 100 = preserve repeated components." << endl;
     if (!readNumber(
         L"  Repeated-component preservation priority, % (Enter = 50): ",
         50.0, 0.0, 100.0,
