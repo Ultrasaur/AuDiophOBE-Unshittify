@@ -1237,6 +1237,18 @@ int main()
                         << declip.legacyCandidateLen3To4 << L"/"
                         << declip.legacyCandidateLen5To8 << L"/"
                         << declip.legacyCandidateLen9Plus
+                        << L" | shape exact-flat/tight/moderate/wide "
+                        << declip.legacyShapeExactFlatRuns << L"/"
+                        << declip.legacyShapeRangeTightRuns << L"/"
+                        << declip.legacyShapeRangeModerateRuns << L"/"
+                        << declip.legacyShapeRangeWideRuns
+                        << L" | both neighbors lower "
+                        << declip.legacyShapeBothNeighborsLowerRuns
+                        << L" | neighbor symmetry <=1/5/20%/>20% "
+                        << declip.legacyShapeNeighborSymmetry01 << L"/"
+                        << declip.legacyShapeNeighborSymmetry05 << L"/"
+                        << declip.legacyShapeNeighborSymmetry20 << L"/"
+                        << declip.legacyShapeNeighborAsymmetricRuns
                         << L" | candidate overlap none/partial/full "
                         << declip.legacyCandidateNoOverlapRuns << L"/"
                         << declip.legacyCandidatePartialOverlapRuns << L"/"
