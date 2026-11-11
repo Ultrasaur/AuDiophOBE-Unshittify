@@ -18,7 +18,7 @@ using ProgressCallback = std::function<void(int)>;
 // Параметры эквализации
 struct EqualizerSettings
 {
-    double intensity = 0.5;     // доля применяемой коррекции (0.25 ... 1.0)
+    double intensity = 1.0;     // по умолчанию применяется 100% коррекции
     double softLimitDb = 6.0;   // мягкая граница: до неё коррекция линейна
     double hardLimitDb = 12.0;   // жёсткая граница: коррекция не превышает её
 
