@@ -240,6 +240,15 @@ bool saveBandReductionGraph(
     std::string& error
 );
 
+bool saveRepeatedComponentsGraph(
+    const AudioData& repeatedAudio,
+    const RepetitionResult& repetitions,
+    const std::vector<double>& groupReductionDb,
+    const std::filesystem::path& filename,
+    const std::string& title,
+    std::string& error
+);
+
 // График во временной области: обзор трека и увеличенный фрагмент
 // с самым заметным восстановленным пиком (before - исходный, after - восстановленный)
 bool saveDeclipGraph(
