@@ -21,6 +21,7 @@
 #include "fft.h"
 #include "profiles.h"
 #include "equalizer.h"
+#include "repetition.h"
 
 #pragma comment(lib, "Ole32.lib")
 #pragma comment(lib, "Uuid.lib")
@@ -844,6 +845,30 @@ int main()
                 // Копия исходного аудио нужна только для графика сравнения
                 AudioData originalAudio = audio;
 
+                AudioData repeatedComponents;
+                AudioData residualAudio;
+                RepetitionResult repetitions;
+                RepetitionSettings repetitionSettings;
+                string repetitionError;
+
+                const bool repetitionReady = separateRepeatedComponents(
+                    originalAudio,
+                    repeatedComponents,
+                    residualAudio,
+                    repetitionSettings,
+                    repetitions,
+                    repetitionError
+                );
+
+                if (repetitionReady && repetitions.groups > 0)
+                {
+                    wostringstream repetitionInfo;
+                    repetitionInfo << L"Repeated components: "
+                        << repetitions.groups << L" groups, "
+                        << repetitions.occurrences << L" occurrences";
+                    progress.note(repetitionInfo.str());
+                }
+
                 DeclipResult declip = declipAudio(
                     audio,
                     2,
@@ -852,7 +877,10 @@ int main()
                         5,
                         5,
                         L"Restoring clipped peaks"
-                    )
+                    ),
+                    repetitionReady ? &repeatedComponents : nullptr,
+                    repetitionReady ? &residualAudio : nullptr,
+                    repetitionReady ? &repetitions : nullptr
                 );
 
                 if (declip.runs > 0 || declip.skipped > 0)
