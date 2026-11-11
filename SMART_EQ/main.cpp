@@ -1016,9 +1016,107 @@ int main()
                     originalAudio.samples.clear();
                     originalAudio.samples.shrink_to_fit();
 
-                    // First attenuate each repeated sound as a whole. The
-                    // same scalar gain is used for every occurrence and channel.
-                    // All gains are calculated before any repeated samples are changed.
+                    // First create headroom by reducing peaks in the non-repeating residual.
+                    // Detection sees the full mix, but only the residual is changed.
+                    AudioData& bandTarget = hasRepeatedGroups
+                        ? residualAudio
+                        : audio;
+
+                    const AudioData* fixedComponents = hasRepeatedGroups
+                        ? &repeatedProcessed
+                        : nullptr;
+
+                    BandReductionPlan bands = planBandReduction(
+                        bandTarget,
+                        settings.declipCeilingDb,
+                        settings.declipAttackMs,
+                        settings.declipReferenceReleaseMs,
+                        DECLIP_GRAPH_COLUMNS,
+                        262144,
+                        makeStageProgress(
+                            10,
+                            25,
+                            L"Calculating multiband reduction"
+                        ),
+                        fixedComponents
+                    );
+
+                    applyBandReduction(
+                        bandTarget,
+                        bands,
+                        makeStageProgress(
+                            35,
+                            10,
+                            L"Applying multiband reduction"
+                        )
+                    );
+
+                    bands.chunks.clear();
+                    bands.chunks.shrink_to_fit();
+
+                    // Local peak reduction also changes only the residual.
+                    PeakReductionPlan residual = planPeakReduction(
+                        bandTarget,
+                        settings.declipCeilingDb,
+                        settings.declipFadeMs,
+                        DECLIP_GRAPH_COLUMNS,
+                        makeStageProgress(
+                            45,
+                            10,
+                            L"Calculating peak reduction"
+                        ),
+                        fixedComponents
+                    );
+
+                    applyPeakReduction(
+                        bandTarget,
+                        residual,
+                        makeStageProgress(
+                            55,
+                            5,
+                            L"Applying peak reduction"
+                        )
+                    );
+
+                    if (bands.affectedFrames > 0 || !residual.regions.empty())
+                    {
+                        saveBandReductionGraph(
+                            bands,
+                            residual,
+                            settings.declipCeilingDb,
+                            job.graphBands,
+                            graphTitle,
+                            graphError
+                        );
+
+                        wostringstream info;
+
+                        info << fixed << setprecision(1)
+                            << L"Peaks lowered by band: " << job.relative.wstring()
+                            << L" |";
+
+                        for (size_t b = 0; b < BAND_COUNT; b++)
+                        {
+                            if (bands.maxReductionDb[b] < -0.05)
+                            {
+                                const string label = getBandLabel(b);
+
+                                info << L" " << wstring(label.begin(), label.end())
+                                    << L" Hz " << bands.maxReductionDb[b] << L" dB;";
+                            }
+                        }
+
+                        if (residual.maxReductionDb < -0.05)
+                        {
+                            info << L" common " << residual.maxReductionDb << L" dB";
+                        }
+
+                        progress.note(info.str());
+                    }
+
+                    // After residual-only peak reduction, attenuate a repeated group only
+                    // if the combined signal still exceeds the configured ceiling.
+                    // The same central gain is used for every occurrence and channel.
                     if (hasRepeatedGroups)
                     {
                         const double ceiling = pow(
@@ -1210,15 +1308,65 @@ int main()
                                     static_cast<size_t>(audio.frameCount),
                                     occurrence.start + group.length);
 
+                                const size_t occurrenceLength =
+                                    endFrame - occurrence.start;
+
+                                const size_t requestedFadeFrames =
+                                    max<size_t>(
+                                        1,
+                                        static_cast<size_t>(round(
+                                            audio.sampleRate * 0.005
+                                        ))
+                                    );
+
+                                // Limit each edge fade to half the occurrence,
+                                // so short sounds still have a central region.
+                                const size_t fadeFrames = min(
+                                    requestedFadeFrames,
+                                    max<size_t>(1, occurrenceLength / 2)
+                                );
+
                                 for (size_t frame = occurrence.start;
                                     frame < endFrame; ++frame)
                                 {
+                                    const size_t framesFromStart =
+                                        frame - occurrence.start + 1;
+
+                                    const size_t framesToEnd =
+                                        endFrame - frame;
+
+                                    const double fadeInPosition = min(
+                                        1.0,
+                                        static_cast<double>(framesFromStart) /
+                                            fadeFrames
+                                    );
+
+                                    const double fadeOutPosition = min(
+                                        1.0,
+                                        static_cast<double>(framesToEnd) /
+                                            fadeFrames
+                                    );
+
+                                    const double fadeIn =
+                                        0.5 - 0.5 * cos(3.14159265358979323846 *
+                                            fadeInPosition);
+
+                                    const double fadeOut =
+                                        0.5 - 0.5 * cos(3.14159265358979323846 *
+                                            fadeOutPosition);
+
+                                    const double envelope =
+                                        min(fadeIn, fadeOut);
+
+                                    const double localGain =
+                                        1.0 + (groupGain - 1.0) * envelope;
+
                                     for (size_t channel = 0;
                                         channel < audio.channels; ++channel)
                                     {
                                         repeatedProcessed.samples[
                                             frame * audio.channels + channel] *=
-                                            static_cast<float>(groupGain);
+                                            static_cast<float>(localGain);
                                     }
                                 }
                             }
@@ -1233,103 +1381,7 @@ int main()
                         }
                     }
 
-                    // Peak detection sees the full mix; the reducers modify
-                    // only the non-repeating residual.
-                    AudioData& bandTarget = hasRepeatedGroups
-                        ? residualAudio
-                        : audio;
 
-                    const AudioData* fixedComponents = hasRepeatedGroups
-                        ? &repeatedProcessed
-                        : nullptr;
-
-                    BandReductionPlan bands = planBandReduction(
-                        bandTarget,
-                        settings.declipCeilingDb,
-                        settings.declipAttackMs,
-                        settings.declipReferenceReleaseMs,
-                        DECLIP_GRAPH_COLUMNS,
-                        262144,
-                        makeStageProgress(
-                            10,
-                            25,
-                            L"Calculating multiband reduction"
-                        ),
-                        fixedComponents
-                    );
-
-                    applyBandReduction(
-                        bandTarget,
-                        bands,
-                        makeStageProgress(
-                            35,
-                            10,
-                            L"Applying multiband reduction"
-                        )
-                    );
-
-                    bands.chunks.clear();
-                    bands.chunks.shrink_to_fit();
-
-                    // Local peak reduction also changes only the residual.
-                    PeakReductionPlan residual = planPeakReduction(
-                        bandTarget,
-                        settings.declipCeilingDb,
-                        settings.declipFadeMs,
-                        DECLIP_GRAPH_COLUMNS,
-                        makeStageProgress(
-                            45,
-                            10,
-                            L"Calculating peak reduction"
-                        ),
-                        fixedComponents
-                    );
-
-                    applyPeakReduction(
-                        bandTarget,
-                        residual,
-                        makeStageProgress(
-                            55,
-                            5,
-                            L"Applying peak reduction"
-                        )
-                    );
-
-                    if (bands.affectedFrames > 0 || !residual.regions.empty())
-                    {
-                        saveBandReductionGraph(
-                            bands,
-                            residual,
-                            settings.declipCeilingDb,
-                            job.graphBands,
-                            graphTitle,
-                            graphError
-                        );
-
-                        wostringstream info;
-
-                        info << fixed << setprecision(1)
-                            << L"Peaks lowered by band: " << job.relative.wstring()
-                            << L" |";
-
-                        for (size_t b = 0; b < BAND_COUNT; b++)
-                        {
-                            if (bands.maxReductionDb[b] < -0.05)
-                            {
-                                const string label = getBandLabel(b);
-
-                                info << L" " << wstring(label.begin(), label.end())
-                                    << L" Hz " << bands.maxReductionDb[b] << L" dB;";
-                            }
-                        }
-
-                        if (residual.maxReductionDb < -0.05)
-                        {
-                            info << L" common " << residual.maxReductionDb << L" dB";
-                        }
-
-                        progress.note(info.str());
-                    }
                 }
 
                 if (repetitionReady && !repetitions.groupDetails.empty())
