@@ -1242,7 +1242,8 @@ int main()
                         << declip.legacyShapeRangeTightRuns << L"/"
                         << declip.legacyShapeRangeModerateRuns << L"/"
                         << declip.legacyShapeRangeWideRuns
-                        << L" | both neighbors lower "
+                        << L" | neighbors available/both lower "
+                        << declip.legacyShapeNeighborAvailableRuns << L"/"
                         << declip.legacyShapeBothNeighborsLowerRuns
                         << L" | neighbor symmetry <=1/5/20%/>20% "
                         << declip.legacyShapeNeighborSymmetry01 << L"/"
