@@ -106,7 +106,8 @@ namespace
         size_t first,
         size_t second,
         size_t windowFrames,
-        double minCorrelation)
+        double minCorrelation,
+        double& score)
     {
         double dot[2] = {};
         double energyA[2] = {};
@@ -133,17 +134,13 @@ namespace
             }
         }
 
-        // Предварительная проверка намеренно мягче
-        // окончательного критерия корреляции.
-        double coarseThreshold = minCorrelation * 0.75;
+        const double coarseThreshold = minCorrelation * 0.75;
+        score = 0.0;
 
         for (unsigned int ch = 0; ch < audio.channels; ++ch)
         {
-            if (energyA[ch] < 1e-12 ||
-                energyB[ch] < 1e-12)
-            {
+            if (energyA[ch] < 1e-12 || energyB[ch] < 1e-12)
                 continue;
-            }
 
             double correlation =
                 std::abs(dot[ch]) /
@@ -151,13 +148,16 @@ namespace
 
             if (correlation < coarseThreshold)
                 return false;
+
+            score += correlation;
         }
 
+        score /= audio.channels;
         return true;
     }
 
-    // Проверяет фрагменты с небольшим временным смещением.
-    // Усиление левого и правого каналов определяется отдельно.
+    // Сначала ранжирует временные смещения по быстрой проверке,
+    // затем выполняет полное сравнение только для трёх лучших.
     bool compareFragments(
         const AudioData& audio,
         size_t first,
@@ -172,12 +172,25 @@ namespace
         bool& coarsePassed,
         bool& fullPassed)
     {
+        struct CoarseCandidate
+        {
+            int offset = 0;
+            double score = -1.0;
+        };
+
+        constexpr size_t bestCandidateCount = 3;
+        std::array<CoarseCandidate, bestCandidateCount> bestCandidates{};
+
         const size_t shiftStep =
             std::max<size_t>(1, audio.sampleRate / 8000);
 
+        coarsePassed = false;
+        fullPassed = false;
         bool found = false;
         bestScore = -1.0;
 
+        // Этап 1. Быстро проверяем все допустимые смещения
+        // и сохраняем только три лучших по предварительной корреляции.
         for (int offset = -static_cast<int>(maxShift);
             offset <= static_cast<int>(maxShift);
             offset += static_cast<int>(shiftStep))
@@ -192,17 +205,46 @@ namespace
                 windowFrames > audio.frameCount)
                 continue;
 
+            double coarseScore = 0.0;
+
             if (!coarseCompareFragments(
                 audio,
                 first,
                 static_cast<size_t>(alignedSecond),
                 windowFrames,
-                settings.minCorrelation))
+                settings.minCorrelation,
+                coarseScore))
             {
                 continue;
             }
 
             coarsePassed = true;
+
+            for (size_t i = 0; i < bestCandidateCount; ++i)
+            {
+                if (coarseScore > bestCandidates[i].score)
+                {
+                    for (size_t j = bestCandidateCount - 1; j > i; --j)
+                        bestCandidates[j] = bestCandidates[j - 1];
+
+                    bestCandidates[i].offset = offset;
+                    bestCandidates[i].score = coarseScore;
+                    break;
+                }
+            }
+        }
+
+        if (!coarsePassed)
+            return false;
+
+        // Этап 2. Полное сравнение наиболее перспективных смещений.
+        for (const CoarseCandidate& candidate : bestCandidates)
+        {
+            if (candidate.score < 0.0)
+                continue;
+
+            const size_t alignedSecond = static_cast<size_t>(
+                static_cast<long long>(second) + candidate.offset);
 
             double dot[2] = {};
             double energyA[2] = {};
@@ -214,15 +256,14 @@ namespace
                     ch < audio.channels;
                     ++ch)
                 {
-                    size_t indexA =
+                    const size_t indexA =
                         (first + i) * audio.channels + ch;
 
-                    size_t indexB =
-                        (static_cast<size_t>(alignedSecond) + i)
-                        * audio.channels + ch;
+                    const size_t indexB =
+                        (alignedSecond + i) * audio.channels + ch;
 
-                    double a = audio.samples[indexA];
-                    double b = audio.samples[indexB];
+                    const double a = audio.samples[indexA];
+                    const double b = audio.samples[indexB];
 
                     dot[ch] += a * b;
                     energyA[ch] += a * a;
@@ -245,7 +286,7 @@ namespace
                     break;
                 }
 
-                double correlation =
+                const double correlation =
                     std::abs(dot[ch]) /
                     std::sqrt(energyA[ch] * energyB[ch]);
 
@@ -257,7 +298,7 @@ namespace
 
                 gains[ch] = dot[ch] / energyA[ch];
 
-                double absoluteGain = std::abs(gains[ch]);
+                const double absoluteGain = std::abs(gains[ch]);
 
                 if (absoluteGain < settings.minGain ||
                     absoluteGain > settings.maxGain)
@@ -279,8 +320,7 @@ namespace
             {
                 found = true;
                 bestScore = score;
-                bestOffset = offset;
-
+                bestOffset = candidate.offset;
                 gainLeft = gains[0];
                 gainRight =
                     audio.channels == 1 ? gains[0] : gains[1];
