@@ -133,7 +133,7 @@ bool calculateEqualizerCurve(
     vector<double>& requestedCorrectionDb,
     string& error)
 {
-    if (!(settings.intensity > 0.0 && settings.intensity <= 1.0) ||
+    if (!(settings.intensity >= 0.0 && settings.intensity <= 1.0) ||
         !(settings.softLimitDb >= 0.0) ||
         !(settings.hardLimitDb >= settings.softLimitDb))
     {
@@ -279,6 +279,20 @@ bool applyEqualizer(
     {
         error = "Invalid equalizer curve.";
         return false;
+    }
+
+    // При нулевой интенсивности эквалайзер полностью прозрачен:
+    // не выполняем FFT и сохраняем аудиоданные без каких-либо изменений.
+    const bool noCorrection = all_of(
+        correctionDb.begin(),
+        correctionDb.end(),
+        [](double value) { return abs(value) < 1e-12; }
+    );
+
+    if (noCorrection)
+    {
+        outputAudio = inputAudio;
+        return true;
     }
 
     // Создание выходного аудиофайла
