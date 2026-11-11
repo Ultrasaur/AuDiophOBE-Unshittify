@@ -3734,6 +3734,357 @@ bool saveDeclipGraph(
 }
 
 // График многополосного снижения: усиление по полосам и сильнейшее событие
+
+// Диагностика повторяющихся компонентов: огибающая каждой группы,
+// фактическое общее снижение её уровня и усреднённый спектр.
+bool saveRepeatedComponentsGraph(
+    const AudioData& repeatedAudio,
+    const RepetitionResult& repetitions,
+    const vector<double>& groupReductionDb,
+    const filesystem::path& filename,
+    const string& title,
+    string& error)
+{
+    if (repeatedAudio.channels == 0 ||
+        repeatedAudio.sampleRate == 0 ||
+        repeatedAudio.frameCount == 0 ||
+        repeatedAudio.samples.size() !=
+            repeatedAudio.frameCount * repeatedAudio.channels ||
+        repetitions.groupDetails.empty() ||
+        groupReductionDb.size() != repetitions.groupDetails.size())
+    {
+        error = "Invalid repeated-component graph data.";
+        return false;
+    }
+
+    const double WIDTH = 1100.0;
+    const double HEIGHT_PER_GROUP = 190.0;
+    const double TOP = 76.0;
+    const double HEIGHT = TOP +
+        HEIGHT_PER_GROUP * repetitions.groupDetails.size() + 28.0;
+
+    const double timeLeft = 66.0;
+    const double timeWidth = 520.0;
+    const double spectrumLeft = 680.0;
+    const double spectrumWidth = 360.0;
+    const double plotTopOffset = 42.0;
+    const double plotHeight = 104.0;
+    const size_t envelopeColumns = 120;
+
+    auto groupLabel = [](size_t index)
+        {
+            string label;
+            ++index;
+
+            while (index > 0)
+            {
+                --index;
+                label.insert(label.begin(),
+                    static_cast<char>('A' + index % 26));
+                index /= 26;
+            }
+
+            return label;
+        };
+
+    ofstream file(filename);
+
+    if (!file.is_open())
+    {
+        error = "Unable to create repeated-component graph file.";
+        return false;
+    }
+
+    file << fixed << setprecision(2);
+    file << "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n";
+    file << "<svg xmlns=\"http://www.w3.org/2000/svg\" "
+        << "viewBox=\"0 0 " << WIDTH << " " << HEIGHT << "\" "
+        << "width=\"" << WIDTH << "\" height=\"" << HEIGHT << "\" "
+        << "font-family=\"Arial, Helvetica, sans-serif\" font-size=\"11\">\n";
+    file << "<rect width=\"100%\" height=\"100%\" fill=\"#ffffff\"/>\n";
+    writeGraphTitle(file, title + " | Repeated component diagnostics", WIDTH);
+
+    file << "<text x=\"" << timeLeft << "\" y=\"58\" "
+        << "font-weight=\"bold\" fill=\"#222222\">Amplitude envelope by relative time</text>\n";
+    file << "<text x=\"" << spectrumLeft << "\" y=\"58\" "
+        << "font-weight=\"bold\" fill=\"#222222\">Average spectrum of group occurrences</text>\n";
+
+    for (size_t groupIndex = 0;
+        groupIndex < repetitions.groupDetails.size(); ++groupIndex)
+    {
+        const RepetitionGroup& group =
+            repetitions.groupDetails[groupIndex];
+
+        if (group.length == 0 || group.occurrences.empty())
+            continue;
+
+        const double sectionTop =
+            TOP + groupIndex * HEIGHT_PER_GROUP;
+        const double plotTop = sectionTop + plotTopOffset;
+        const double plotBottom = plotTop + plotHeight;
+
+        const double reductionDb = groupReductionDb[groupIndex];
+
+        ostringstream heading;
+        heading << "Group " << groupLabel(groupIndex)
+            << " | " << group.occurrences.size() << " occurrences"
+            << " | applied group gain: "
+            << (reductionDb > -0.005 ? 0.0 : reductionDb) << " dB";
+
+        file << "<text x=\"60\" y=\"" << sectionTop + 17.0
+            << "\" font-size=\"14\" font-weight=\"bold\" fill=\"#222222\">"
+            << escapeXml(heading.str()) << "</text>\n";
+
+        // Усреднённая RMS-огибающая по всем вхождениям группы.
+        vector<double> averagePower(envelopeColumns, 0.0);
+        vector<size_t> validOccurrences(envelopeColumns, 0);
+
+        AudioData groupAudio = {};
+        groupAudio.channels = repeatedAudio.channels;
+        groupAudio.sampleRate = repeatedAudio.sampleRate;
+
+        size_t validOccurrenceCount = 0;
+
+        for (const RepetitionOccurrence& occurrence : group.occurrences)
+        {
+            if (occurrence.start >= repeatedAudio.frameCount)
+                continue;
+
+            const size_t available = static_cast<size_t>(
+                min<uint64_t>(
+                    group.length,
+                    repeatedAudio.frameCount - occurrence.start));
+
+            if (available == 0)
+                continue;
+
+            validOccurrenceCount++;
+
+            for (size_t column = 0; column < envelopeColumns; ++column)
+            {
+                const size_t from =
+                    available * column / envelopeColumns;
+                const size_t to = max(
+                    from + 1,
+                    available * (column + 1) / envelopeColumns);
+
+                double power = 0.0;
+                size_t sampleCount = 0;
+
+                for (size_t frame = from; frame < to && frame < available; ++frame)
+                {
+                    const size_t sourceFrame = occurrence.start + frame;
+
+                    for (size_t channel = 0;
+                        channel < repeatedAudio.channels; ++channel)
+                    {
+                        const double sample = repeatedAudio.samples[
+                            sourceFrame * repeatedAudio.channels + channel];
+
+                        power += sample * sample;
+                        sampleCount++;
+                    }
+                }
+
+                if (sampleCount > 0)
+                {
+                    averagePower[column] += power / sampleCount;
+                    validOccurrences[column]++;
+                }
+            }
+
+            const size_t oldSize = groupAudio.samples.size();
+            groupAudio.samples.resize(
+                oldSize + available * repeatedAudio.channels);
+
+            copy_n(
+                repeatedAudio.samples.begin() +
+                    occurrence.start * repeatedAudio.channels,
+                available * repeatedAudio.channels,
+                groupAudio.samples.begin() + oldSize);
+        }
+
+        groupAudio.frameCount =
+            groupAudio.samples.size() / groupAudio.channels;
+
+        // Сетка и шкала огибающей в dBFS.
+        for (int tick = 0; tick <= 3; ++tick)
+        {
+            const double db = -60.0 + tick * 20.0;
+            const double y = plotTop +
+                plotHeight * (0.0 - db) / 60.0;
+
+            file << "<line x1=\"" << timeLeft << "\" y1=\"" << y
+                << "\" x2=\"" << timeLeft + timeWidth << "\" y2=\"" << y
+                << "\" stroke=\"#e5e5e5\"/>\n";
+
+            file << "<text x=\"" << timeLeft - 8.0 << "\" y=\"" << y + 4.0
+                << "\" text-anchor=\"end\" fill=\"#555555\">"
+                << db << "</text>\n";
+        }
+
+        file << "<text x=\"" << timeLeft + timeWidth / 2.0
+            << "\" y=\"" << plotBottom + 27.0
+            << "\" text-anchor=\"middle\" fill=\"#444444\">"
+            << "Relative time within sound (ms; group length "
+            << setprecision(1)
+            << 1000.0 * group.length / repeatedAudio.sampleRate
+            << ")</text>\n";
+
+        file << "<rect x=\"" << timeLeft << "\" y=\"" << plotTop
+            << "\" width=\"" << timeWidth << "\" height=\"" << plotHeight
+            << "\" fill=\"none\" stroke=\"#888888\"/>\n";
+
+        if (validOccurrenceCount > 0)
+        {
+            file << "<polyline fill=\"none\" stroke=\"#1f6feb\" "
+                << "stroke-width=\"2\" points=\"";
+
+            for (size_t column = 0; column < envelopeColumns; ++column)
+            {
+                const double power = validOccurrences[column] > 0
+                    ? averagePower[column] / validOccurrences[column]
+                    : 0.0;
+
+                const double db = 20.0 * log10(
+                    max(sqrt(power), 1e-6));
+
+                const double clampedDb = clamp(db, -60.0, 0.0);
+                const double x = timeLeft +
+                    timeWidth * column / (envelopeColumns - 1);
+                const double y = plotTop +
+                    plotHeight * (0.0 - clampedDb) / 60.0;
+
+                file << x << "," << y << " ";
+            }
+
+            file << "\"/>\n";
+        }
+        else
+        {
+            file << "<text x=\"" << timeLeft + 10.0 << "\" y=\""
+                << plotTop + 20.0 << "\" fill=\"#777777\">No valid occurrences</text>\n";
+        }
+
+        // Спектр строится по конкатенированным фрагментам всех вхождений.
+        Spectrum groupSpectrum;
+        string spectrumError;
+        bool spectrumReady = false;
+
+        if (groupAudio.frameCount > 0 &&
+            groupAudio.sampleRate >= 40000)
+        {
+            size_t fftSize = 2048;
+
+            while (fftSize > group.length && fftSize > 256)
+                fftSize >>= 1;
+
+            spectrumReady = calculateAverageSpectrum(
+                groupAudio,
+                groupSpectrum,
+                spectrumError,
+                fftSize,
+                max<size_t>(1, fftSize / 4),
+                12,
+                3);
+        }
+
+        if (spectrumReady)
+        {
+            double minDb = 0.0;
+            double maxDb = -120.0;
+
+            for (double value : groupSpectrum.powerDb)
+            {
+                minDb = min(minDb, value);
+                maxDb = max(maxDb, value);
+            }
+
+            if (maxDb - minDb < 1.0)
+                minDb = maxDb - 1.0;
+
+            const double spectrumTop = plotTop;
+            const double spectrumBottom = plotBottom;
+
+            auto xFrequency = [&](double frequency)
+                {
+                    return spectrumLeft + spectrumWidth *
+                        log(frequency / 20.0) / log(20000.0 / 20.0);
+                };
+
+            auto yPower = [&](double value)
+                {
+                    return spectrumTop + plotHeight *
+                        (maxDb - value) / (maxDb - minDb);
+                };
+
+            for (int tick = 0; tick <= 4; ++tick)
+            {
+                const double value =
+                    minDb + (maxDb - minDb) * tick / 4.0;
+                const double y = yPower(value);
+
+                file << "<line x1=\"" << spectrumLeft << "\" y1=\"" << y
+                    << "\" x2=\"" << spectrumLeft + spectrumWidth
+                    << "\" y2=\"" << y
+                    << "\" stroke=\"#e5e5e5\"/>\n";
+
+                file << "<text x=\"" << spectrumLeft - 7.0
+                    << "\" y=\"" << y + 4.0
+                    << "\" text-anchor=\"end\" fill=\"#555555\">"
+                    << setprecision(1) << value << " dB</text>\n";
+            }
+
+            file << "<polyline fill=\"none\" stroke=\"#d97706\" "
+                << "stroke-width=\"2\" points=\"";
+
+            for (size_t i = 0; i < groupSpectrum.frequencies.size(); ++i)
+            {
+                file << xFrequency(groupSpectrum.frequencies[i]) << ","
+                    << yPower(groupSpectrum.powerDb[i]) << " ";
+            }
+
+            file << "\"/>\n";
+
+            file << "<text x=\"" << spectrumLeft << "\" y=\""
+                << plotBottom + 27.0
+                << "\" fill=\"#444444\">20 Hz</text>\n";
+            file << "<text x=\"" << spectrumLeft + spectrumWidth
+                << "\" y=\"" << plotBottom + 27.0
+                << "\" text-anchor=\"end\" fill=\"#444444\">20 kHz</text>\n";
+        }
+        else
+        {
+            file << "<rect x=\"" << spectrumLeft << "\" y=\"" << plotTop
+                << "\" width=\"" << spectrumWidth << "\" height=\""
+                << plotHeight << "\" fill=\"none\" stroke=\"#cccccc\"/>\n";
+            file << "<text x=\"" << spectrumLeft + 8.0 << "\" y=\""
+                << plotTop + 20.0
+                << "\" fill=\"#777777\">Average spectrum unavailable";
+            if (repeatedAudio.sampleRate < 40000)
+                file << " (sample rate below 40 kHz)";
+            file << "</text>\n";
+        }
+
+        file << "<line x1=\"60\" y1=\""
+            << sectionTop + HEIGHT_PER_GROUP - 1.0
+            << "\" x2=\"" << WIDTH - 40.0 << "\" y2=\""
+            << sectionTop + HEIGHT_PER_GROUP - 1.0
+            << "\" stroke=\"#dddddd\"/>\n";
+    }
+
+    file << "</svg>\n";
+    file.close();
+
+    if (file.fail())
+    {
+        error = "Unable to write repeated-component graph file.";
+        return false;
+    }
+
+    return true;
+}
+
 bool saveBandReductionGraph(
     const BandReductionPlan& bands,
     const PeakReductionPlan& residual,
