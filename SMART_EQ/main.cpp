@@ -1035,9 +1035,22 @@ int main()
                                 repetitions.groupDetails[groupIndex];
 
                             double groupGain = 1.0;
+                            double limitingAllowed = 1.0;
+                            double limitingRepeated = 0.0;
+                            double limitingResidual = 0.0;
+                            double limitingMixed = 0.0;
+                            size_t limitingFrame = 0;
+                            size_t limitingChannel = 0;
+                            size_t limitingOccurrence = 0;
+                            size_t constraintCount = 0;
 
-                            for (const RepetitionOccurrence& occurrence : group.occurrences)
+                            for (size_t occurrenceIndex = 0;
+                                occurrenceIndex < group.occurrences.size();
+                                ++occurrenceIndex)
                             {
+                                const RepetitionOccurrence& occurrence =
+                                    group.occurrences[occurrenceIndex];
+
                                 if (occurrence.start >= audio.frameCount)
                                     continue;
 
@@ -1061,34 +1074,42 @@ int main()
                                         const double mixed =
                                             repeatedValue + residualValue;
 
-                                        // Reduce the repeated component only
-                                        // when it pushes an otherwise safe
-                                        // residual farther beyond the ceiling.
+                                        double allowed = 1.0;
+
                                         if (mixed > ceiling &&
                                             repeatedValue > 1e-12)
                                         {
-                                            const double allowed =
+                                            allowed =
                                                 (ceiling - residualValue) /
                                                 repeatedValue;
-
-                                            if (allowed >= 0.0)
-                                            {
-                                                groupGain = min(
-                                                    groupGain, allowed);
-                                            }
                                         }
                                         else if (mixed < -ceiling &&
                                             repeatedValue < -1e-12)
                                         {
-                                            const double allowed =
+                                            allowed =
                                                 (-ceiling - residualValue) /
                                                 repeatedValue;
+                                        }
+                                        else
+                                        {
+                                            continue;
+                                        }
 
-                                            if (allowed >= 0.0)
-                                            {
-                                                groupGain = min(
-                                                    groupGain, allowed);
-                                            }
+                                        if (allowed < 0.0)
+                                            continue;
+
+                                        ++constraintCount;
+
+                                        if (allowed < groupGain)
+                                        {
+                                            groupGain = allowed;
+                                            limitingAllowed = allowed;
+                                            limitingRepeated = repeatedValue;
+                                            limitingResidual = residualValue;
+                                            limitingMixed = mixed;
+                                            limitingFrame = frame;
+                                            limitingChannel = channel;
+                                            limitingOccurrence = occurrenceIndex;
                                         }
                                     }
                                 }
@@ -1096,8 +1117,60 @@ int main()
 
                             groupGains[groupIndex] =
                                 clamp(groupGain, 0.0, 1.0);
-                        }
 
+                            // Report the exact sample responsible for unusually
+                            // strong attenuation instead of hiding it behind
+                            // the final group-level dB value.
+                            if (groupGain < 0.7079457843841379)
+                            {
+                                wstring groupName;
+                                size_t labelIndex = groupIndex;
+
+                                do
+                                {
+                                    groupName.insert(
+                                        groupName.begin(),
+                                        static_cast<wchar_t>(L'A' + labelIndex % 26));
+
+                                    if (labelIndex < 26)
+                                        break;
+
+                                    labelIndex = labelIndex / 26 - 1;
+                                } while (true);
+
+                                auto toDbfs = [](double value)
+                                    {
+                                        const double magnitude = abs(value);
+                                        return magnitude > 1e-12
+                                            ? 20.0 * log10(magnitude)
+                                            : -240.0;
+                                    };
+
+                                wostringstream diagnostic;
+                                diagnostic << fixed << setprecision(3)
+                                    << L"Repeated-group limiter: Group "
+                                    << groupName
+                                    << L" | gain "
+                                    << 20.0 * log10(max(groupGain, 1e-12))
+                                    << L" dB | constraints " << constraintCount
+                                    << L" | limiting occurrence "
+                                    << (limitingOccurrence + 1)
+                                    << L"/" << group.occurrences.size()
+                                    << L" | time "
+                                    << static_cast<double>(limitingFrame) /
+                                        audio.sampleRate
+                                    << L" s | channel " << (limitingChannel + 1)
+                                    << L" | repeated " << limitingRepeated
+                                    << L" (" << toDbfs(limitingRepeated) << L" dBFS)"
+                                    << L" | residual " << limitingResidual
+                                    << L" (" << toDbfs(limitingResidual) << L" dBFS)"
+                                    << L" | mix " << limitingMixed
+                                    << L" (" << toDbfs(limitingMixed) << L" dBFS)"
+                                    << L" | allowed gain " << limitingAllowed;
+
+                                progress.note(diagnostic.str());
+                            }
+                        }
                         // Store the actual uniform attenuation for diagnostics.
                         for (size_t groupIndex = 0;
                             groupIndex < groupGains.size(); ++groupIndex)
