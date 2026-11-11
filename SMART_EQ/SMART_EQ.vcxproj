@@ -148,6 +148,7 @@
     <ClCompile Include="fft.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="profiles.cpp" />
+    <ClCompile Include="repetition.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="audio.h" />
@@ -157,6 +158,7 @@
     <ClInclude Include="equalizer.h" />
     <ClInclude Include="fft.h" />
     <ClInclude Include="profiles.h" />
+    <ClInclude Include="repetition.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
