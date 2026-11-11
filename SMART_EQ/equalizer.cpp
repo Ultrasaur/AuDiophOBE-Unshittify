@@ -1,4 +1,5 @@
 #include "equalizer.h"
+#include "repetition.h"
 
 #include <cmath>
 #include <algorithm>
@@ -1384,7 +1385,10 @@ DeclipResult declipAudio(
     AudioData& audio,
     size_t minRunLength,
     size_t maxRunLength,
-    const ProgressCallback& progress)
+    const ProgressCallback& progress,
+    const AudioData* repeatedComponents,
+    const AudioData* residualAudio,
+    const RepetitionResult* repetitions)
 {
     DeclipResult result;
 
@@ -1417,6 +1421,286 @@ DeclipResult declipAudio(
     const size_t channels = audio.channels;
     const size_t blockSize = audio.sampleRate;
     const size_t blockCount = (frames + blockSize - 1) / blockSize;
+
+    // Frames belonging to a repeated component with a clean reference are
+    // excluded from the legacy declipper. The component itself is either kept
+    // byte-for-byte or reconstructed from a clean occurrence.
+    vector<uint8_t> protectedFrames(frames, 0);
+
+    const bool hasRepetitionData =
+        repeatedComponents != nullptr &&
+        residualAudio != nullptr &&
+        repetitions != nullptr &&
+        repeatedComponents->channels == audio.channels &&
+        residualAudio->channels == audio.channels &&
+        repeatedComponents->sampleRate == audio.sampleRate &&
+        residualAudio->sampleRate == audio.sampleRate &&
+        repeatedComponents->frameCount == audio.frameCount &&
+        residualAudio->frameCount == audio.frameCount &&
+        repeatedComponents->samples.size() == audio.samples.size() &&
+        residualAudio->samples.size() == audio.samples.size();
+
+    if (hasRepetitionData && !repetitions->groupDetails.empty())
+    {
+        vector<vector<double>> positiveLimits(
+            channels, vector<double>(blockCount, 0.0));
+        vector<vector<double>> negativeLimits(
+            channels, vector<double>(blockCount, 0.0));
+        vector<vector<uint8_t>> rawClipped(
+            channels, vector<uint8_t>(frames, 0));
+
+        // Use the same one-second local ceilings as the existing declipper.
+        for (size_t ch = 0; ch < channels; ++ch)
+        {
+            for (size_t f = 0; f < frames; ++f)
+            {
+                const double value = audio.samples[f * channels + ch];
+                const size_t block = f / blockSize;
+                positiveLimits[ch][block] =
+                    max(positiveLimits[ch][block], value);
+                negativeLimits[ch][block] =
+                    min(negativeLimits[ch][block], value);
+            }
+
+            size_t f = 0;
+            while (f < frames)
+            {
+                const size_t block = f / blockSize;
+                const double value = audio.samples[f * channels + ch];
+                const bool onCeiling =
+                    (value > 0.0 &&
+                        positiveLimits[ch][block] >= MIN_CEILING &&
+                        value >= positiveLimits[ch][block] * (1.0 - CLIP_TOLERANCE)) ||
+                    (value < 0.0 &&
+                        negativeLimits[ch][block] <= -MIN_CEILING &&
+                        value <= negativeLimits[ch][block] * (1.0 - CLIP_TOLERANCE));
+
+                if (!onCeiling)
+                {
+                    ++f;
+                    continue;
+                }
+
+                const size_t first = f;
+                while (f < frames)
+                {
+                    const size_t b = f / blockSize;
+                    const double v = audio.samples[f * channels + ch];
+                    const bool stillOnCeiling =
+                        (v > 0.0 &&
+                            positiveLimits[ch][b] >= MIN_CEILING &&
+                            v >= positiveLimits[ch][b] * (1.0 - CLIP_TOLERANCE)) ||
+                        (v < 0.0 &&
+                            negativeLimits[ch][b] <= -MIN_CEILING &&
+                            v <= negativeLimits[ch][b] * (1.0 - CLIP_TOLERANCE));
+
+                    if (!stillOnCeiling)
+                        break;
+                    ++f;
+                }
+
+                if (f - first >= minRunLength)
+                {
+                    for (size_t k = first; k < f; ++k)
+                        rawClipped[ch][k] = 1;
+                }
+            }
+        }
+
+        for (const RepetitionGroup& group : repetitions->groupDetails)
+        {
+            if (group.length == 0 || group.occurrences.size() < 2)
+                continue;
+
+            // A reference must be free of detected clipping in the mix and
+            // must not exceed the local ceiling as an isolated component.
+            size_t referenceIndex = group.occurrences.size();
+            for (size_t oi = 0; oi < group.occurrences.size(); ++oi)
+            {
+                const RepetitionOccurrence& occurrence = group.occurrences[oi];
+                if (occurrence.start + group.length > frames)
+                    continue;
+
+                bool clean = true;
+                for (size_t i = 0; i < group.length && clean; ++i)
+                {
+                    const size_t frame = occurrence.start + i;
+                    for (size_t ch = 0; ch < channels; ++ch)
+                    {
+                        if (rawClipped[ch][frame])
+                        {
+                            clean = false;
+                            break;
+                        }
+
+                        const double component = repeatedComponents->samples[
+                            frame * channels + ch];
+                        const size_t block = frame / blockSize;
+                        const double limit = component >= 0.0
+                            ? positiveLimits[ch][block]
+                            : -negativeLimits[ch][block];
+
+                        if (limit >= MIN_CEILING &&
+                            abs(component) > limit * (1.0 + CLIP_TOLERANCE))
+                        {
+                            clean = false;
+                            break;
+                        }
+                    }
+                }
+
+                if (clean)
+                {
+                    referenceIndex = oi;
+                    break;
+                }
+            }
+
+            // Without a clean occurrence, leave the group to the original
+            // declipping algorithm unchanged.
+            if (referenceIndex == group.occurrences.size())
+                continue;
+
+            const RepetitionOccurrence& reference =
+                group.occurrences[referenceIndex];
+
+            if (abs(reference.gainLeft) < 1e-12 ||
+                (channels > 1 && abs(reference.gainRight) < 1e-12))
+                continue;
+
+            for (size_t oi = 0; oi < group.occurrences.size(); ++oi)
+            {
+                const RepetitionOccurrence& target = group.occurrences[oi];
+                if (target.start + group.length > frames)
+                    continue;
+
+                const double targetGains[2] = {
+                    target.gainLeft, target.gainRight
+                };
+                const double referenceGains[2] = {
+                    reference.gainLeft, reference.gainRight
+                };
+
+                bool componentClips = false;
+                double commonScale = 1.0;
+
+                for (size_t i = 0; i < group.length; ++i)
+                {
+                    const size_t frame = target.start + i;
+                    const size_t block = frame / blockSize;
+
+                    for (size_t ch = 0; ch < channels; ++ch)
+                    {
+                        const double baseGain = referenceGains[ch];
+                        const double targetGain = targetGains[ch];
+
+                        if (abs(baseGain) < 1e-12)
+                            continue;
+
+                        const double base = repeatedComponents->samples[
+                            (reference.start + i) * channels + ch] / baseGain;
+                        const double predicted = base * targetGain;
+                        const double limit = predicted >= 0.0
+                            ? positiveLimits[ch][block]
+                            : -negativeLimits[ch][block];
+
+                        if (limit >= MIN_CEILING &&
+                            abs(predicted) > limit * (1.0 + CLIP_TOLERANCE))
+                        {
+                            componentClips = true;
+                            commonScale = min(
+                                commonScale,
+                                limit / max(abs(predicted), 1e-12));
+                        }
+                    }
+                }
+
+                if (componentClips)
+                {
+                    // Rebuild only the repeated component. The residual
+                    // preserves every other sound at this time position.
+                    for (size_t i = 0; i < group.length; ++i)
+                    {
+                        const size_t frame = target.start + i;
+                        for (size_t ch = 0; ch < channels; ++ch)
+                        {
+                            const double base = repeatedComponents->samples[
+                                (reference.start + i) * channels + ch] /
+                                referenceGains[ch];
+                            const double reconstructed =
+                                base * targetGains[ch] * commonScale;
+                            const size_t index = frame * channels + ch;
+
+                            audio.samples[index] =
+                                static_cast<float>(
+                                    residualAudio->samples[index] + reconstructed);
+                        }
+                    }
+
+                    // Record the clipped portions for the existing report/graph.
+                    for (size_t ch = 0; ch < channels; ++ch)
+                    {
+                        size_t i = 0;
+                        while (i < group.length)
+                        {
+                            const size_t frame = target.start + i;
+                            const double base = repeatedComponents->samples[
+                                (reference.start + i) * channels + ch] /
+                                referenceGains[ch];
+                            const double predicted = base * targetGains[ch];
+                            const size_t block = frame / blockSize;
+                            const double limit = predicted >= 0.0
+                                ? positiveLimits[ch][block]
+                                : -negativeLimits[ch][block];
+                            const bool clipped = limit >= MIN_CEILING &&
+                                abs(predicted) > limit * (1.0 + CLIP_TOLERANCE);
+
+                            if (!clipped)
+                            {
+                                ++i;
+                                continue;
+                            }
+
+                            const size_t first = i;
+                            while (i < group.length)
+                            {
+                                const size_t f = target.start + i;
+                                const double b = repeatedComponents->samples[
+                                    (reference.start + i) * channels + ch] /
+                                    referenceGains[ch];
+                                const double p = b * targetGains[ch];
+                                const size_t bl = f / blockSize;
+                                const double lim = p >= 0.0
+                                    ? positiveLimits[ch][bl]
+                                    : -negativeLimits[ch][bl];
+
+                                if (!(lim >= MIN_CEILING &&
+                                    abs(p) > lim * (1.0 + CLIP_TOLERANCE)))
+                                    break;
+                                ++i;
+                            }
+
+                            DeclipSegment segment;
+                            segment.channel = ch;
+                            segment.first = target.start + first;
+                            segment.length = i - first;
+                            result.segments.push_back(segment);
+                            result.runs++;
+                            result.samples += segment.length;
+                        }
+                    }
+                }
+
+                // Protect the entire occurrence when a clean reference exists:
+                // a non-clipping repeat must remain untouched.
+                fill(
+                    protectedFrames.begin() + target.start,
+                    protectedFrames.begin() + target.start + group.length,
+                    1
+                );
+            }
+        }
+    }
 
     auto reportChannelProgress = [&](size_t channel, int localProgress)
         {
@@ -1491,6 +1775,12 @@ DeclipResult declipAudio(
 
         while (frame < frames)
         {
+            if (protectedFrames[frame])
+            {
+                ++frame;
+                continue;
+            }
+
             const size_t block = frame / blockSize;
             const double value = signal[frame];
 
@@ -1521,6 +1811,9 @@ DeclipResult declipAudio(
 
             while (frame < frames)
             {
+                if (protectedFrames[frame])
+                    break;
+
                 if (frame >= nextProgressFrame)
                 {
                     reportChannelProgress(
