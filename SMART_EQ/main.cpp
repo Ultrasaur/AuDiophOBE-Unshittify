@@ -1250,8 +1250,8 @@ int main()
                 wostringstream warning;
 
                 warning << fixed << setprecision(1)
-                    << L"Warning: " << job.relative.wstring()
-                    << L" | peak " << quality.peakDb << L" dBFS";
+                    << L"Before EQ: " << job.relative.wstring()
+                    << L" | peak after declipping " << quality.peakDb << L" dBFS";
 
                 if (quality.clippedRuns > 0)
                 {
@@ -1305,7 +1305,17 @@ int main()
                 return false;
             }
 
-            limitPeaks(outputAudio, -1.0);
+            const double finalGainReductionDb =
+                limitPeaks(outputAudio, -1.0);
+
+            if (finalGainReductionDb < -0.001)
+            {
+                wostringstream info;
+                info << fixed << setprecision(2)
+                    << L"Whole-track level reduction after EQ: "
+                    << finalGainReductionDb << L" dB";
+                progress.note(info.str());
+            }
 
             // Освобождаем память исходного аудио
             audio = AudioData{};
