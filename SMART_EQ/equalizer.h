@@ -130,6 +130,7 @@ struct DeclipResult
     std::uint64_t legacyShapeRangeTightRuns = 0;
     std::uint64_t legacyShapeRangeModerateRuns = 0;
     std::uint64_t legacyShapeRangeWideRuns = 0;
+    std::uint64_t legacyShapeNeighborAvailableRuns = 0;
     std::uint64_t legacyShapeBothNeighborsLowerRuns = 0;
     std::uint64_t legacyShapeNeighborSymmetry01 = 0;
     std::uint64_t legacyShapeNeighborSymmetry05 = 0;
