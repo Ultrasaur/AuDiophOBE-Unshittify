@@ -1370,8 +1370,18 @@ int main()
                             << L" | frames " << bandTarget.frameCount
                             << L" | working ceiling " << workingCeilingDb << L" dBFS";
 
-                        if (bandTarget.sampleRate < 40000)
-                            info << L" | WARNING: planBandReduction rejects sample rates below 40000 Hz";
+                        if (bandTarget.channels == 0 ||
+                            bandTarget.sampleRate < 40000 ||
+                            bandTarget.frameCount == 0 ||
+                            bandTarget.samples.size() !=
+                                bandTarget.frameCount * bandTarget.channels)
+                        {
+                            info << L" | WARNING: invalid input for planBandReduction";
+                            info << L" (channels=" << bandTarget.channels
+                                << L", sampleRate=" << bandTarget.sampleRate
+                                << L", frames=" << bandTarget.frameCount
+                                << L", samples=" << bandTarget.samples.size() << L")";
+                        }
 
                         progress.note(info.str());
                     }
