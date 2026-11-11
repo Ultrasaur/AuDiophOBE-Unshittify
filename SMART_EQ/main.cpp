@@ -21,6 +21,7 @@
 #include "fft.h"
 #include "profiles.h"
 #include "equalizer.h"
+#include "repetition.h"
 
 #pragma comment(lib, "Ole32.lib")
 #pragma comment(lib, "Uuid.lib")
@@ -537,6 +538,84 @@ struct ProgressReporter
 
 int main()
 {
+    wcout << L"Repeated component separation test" << endl;
+    wcout << L"Enter input audio filename: ";
+
+    wstring inputPathText;
+    getline(wcin, inputPathText);
+
+    if (inputPathText.empty())
+    {
+        wcerr << L"Input filename is empty." << endl;
+        return 1;
+    }
+
+    fs::path inputPath(inputPathText);
+
+    AudioData original = {};
+    AudioData repeated = {};
+    AudioData residual = {};
+
+    string error;
+
+    if (!loadAudio(inputPath, original, error))
+    {
+        cerr << "Unable to load input audio: "
+            << error << endl;
+        return 1;
+    }
+
+    RepetitionSettings repetitionSettings;
+    RepetitionResult repetitionResult;
+
+    if (!separateRepeatedComponents(
+        original,
+        repeated,
+        residual,
+        repetitionSettings,
+        repetitionResult,
+        error))
+    {
+        cerr << "Separation failed: "
+            << error << endl;
+        return 1;
+    }
+
+    fs::path repeatedPath =
+        inputPath.parent_path() /
+        (inputPath.stem().wstring() + L"_repeated.wav");
+
+    fs::path residualPath =
+        inputPath.parent_path() /
+        (inputPath.stem().wstring() + L"_residual.wav");
+
+    if (!saveAudio(repeatedPath, repeated, error))
+    {
+        cerr << "Unable to save repeated components: "
+            << error << endl;
+        return 1;
+    }
+
+    if (!saveAudio(residualPath, residual, error))
+    {
+        cerr << "Unable to save residual: "
+            << error << endl;
+        return 1;
+    }
+
+    wcout << endl;
+    wcout << L"Separation completed." << endl;
+    wcout << L"Groups found: "
+        << repetitionResult.groups << endl;
+    wcout << L"Occurrences found: "
+        << repetitionResult.occurrences << endl;
+    wcout << L"Repeated components: "
+        << repeatedPath.wstring() << endl;
+    wcout << L"Residual: "
+        << residualPath.wstring() << endl;
+
+    return 0;
+
     // Выбор профиля шума
     NoiseProfile selectedProfile = NoiseProfile::PINK;
 
