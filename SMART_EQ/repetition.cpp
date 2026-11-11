@@ -11,6 +11,7 @@
 #include <iterator>
 #include <array>
 #include <iostream>
+#include <chrono>
 
 namespace
 {
@@ -556,6 +557,8 @@ bool separateRepeatedComponents(
     RepetitionResult& result,
     std::string& error)
 {
+    const auto totalStart = std::chrono::steady_clock::now();
+
     result = {};
 
     if (input.channels == 0 ||
@@ -624,6 +627,10 @@ bool separateRepeatedComponents(
     size_t totalCandidates = 0;
     size_t totalCoarsePasses = 0;
     size_t totalFullPasses = 0;
+    std::chrono::duration<double> candidateGenerationTime{ 0.0 };
+    std::chrono::duration<double> comparisonTime{ 0.0 };
+    std::chrono::duration<double> groupingTime{ 0.0 };
+    std::chrono::duration<double> residualTime{ 0.0 };
 
     // Этап 1. Собираем все подтверждённые совпадения.
     // Пока ничего не помечаем занятым.
@@ -636,14 +643,19 @@ bool separateRepeatedComponents(
             continue;
 
         size_t eligibleFrames = 0;
+        const auto candidateStart = std::chrono::steady_clock::now();
         std::vector<CandidatePair> candidates =
             findCandidates(input, windowFrames, hopFrames, eligibleFrames);
+        const auto candidateEnd = std::chrono::steady_clock::now();
+        candidateGenerationTime += candidateEnd - candidateStart;
 
         totalEligibleFrames += eligibleFrames;
         totalCandidates += candidates.size();
 
         const size_t maxShift =
             std::max<size_t>(1, hopFrames / 2);
+
+        const auto comparisonStart = std::chrono::steady_clock::now();
 
         for (const CandidatePair& candidate : candidates)
         {
@@ -695,6 +707,9 @@ bool separateRepeatedComponents(
 
             matchesByLength[windowFrames].push_back(match);
         }
+
+        const auto comparisonEnd = std::chrono::steady_clock::now();
+        comparisonTime += comparisonEnd - comparisonStart;
     }
 
     // Этап 2. Объединяем пары в группы связанных вхождений.
@@ -706,6 +721,7 @@ bool separateRepeatedComponents(
     };
 
     std::map<size_t, size_t> occupiedRanges;
+    const auto groupingStart = std::chrono::steady_clock::now();
 
     for (const auto& lengthEntry : matchesByLength)
     {
@@ -757,6 +773,10 @@ bool separateRepeatedComponents(
 
         std::vector<bool> visited(positions.size(), false);
 
+        // Буферы коэффициентов переиспользуются между компонентами графа.
+        std::vector<double> relativeGainLeft(positions.size(), 1.0);
+        std::vector<double> relativeGainRight(positions.size(), 1.0);
+
         // Этап 3. Обрабатываем каждую связанную группу.
         for (size_t root = 0; root < positions.size(); ++root)
         {
@@ -766,11 +786,8 @@ bool separateRepeatedComponents(
             std::vector<size_t> queue;
             std::vector<size_t> group;
 
-            std::vector<double> relativeGainLeft(
-                positions.size(), 1.0);
-
-            std::vector<double> relativeGainRight(
-                positions.size(), 1.0);
+            relativeGainLeft[root] = 1.0;
+            relativeGainRight[root] = 1.0;
 
             visited[root] = true;
             queue.push_back(root);
@@ -911,6 +928,9 @@ bool separateRepeatedComponents(
         }
     }
 
+    const auto groupingEnd = std::chrono::steady_clock::now();
+    groupingTime = groupingEnd - groupingStart;
+
     std::cerr
         << "\n[Repetition diagnostics]\n"
         << "Eligible frames: " << totalEligibleFrames << "\n"
@@ -921,11 +941,25 @@ bool separateRepeatedComponents(
         << "Accepted occurrences: " << result.occurrences << "\n";
 
     // Поэтому сумма выходов восстанавливает исходный сигнал.
+    const auto residualStart = std::chrono::steady_clock::now();
     for (size_t i = 0; i < input.samples.size(); ++i)
     {
         residual.samples[i] =
             input.samples[i] - repeated.samples[i];
     }
+    const auto residualEnd = std::chrono::steady_clock::now();
+    residualTime = residualEnd - residualStart;
+
+    const auto totalEnd = std::chrono::steady_clock::now();
+    const std::chrono::duration<double> totalTime = totalEnd - totalStart;
+
+    std::cerr
+        << "\\n[Repetition timing]\\n"
+        << "Candidate generation: " << candidateGenerationTime.count() << " s\\n"
+        << "Fragment comparison: " << comparisonTime.count() << " s\\n"
+        << "Grouping: " << groupingTime.count() << " s\\n"
+        << "Residual creation: " << residualTime.count() << " s\\n"
+        << "Total: " << totalTime.count() << " s\\n";
 
     error.clear();
     return true;
