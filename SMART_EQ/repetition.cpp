@@ -609,11 +609,11 @@ bool separateRepeatedComponents(
         0.0f
     );
 
-    std::map<size_t, size_t> occupiedRanges;
 
-    std::vector<Match> matches;
+    // Этап 1. Собираем все подтверждённые совпадения.
+    // Пока ничего не помечаем занятым.
+    std::map<size_t, std::vector<Match>> matchesByLength;
 
-    // Этап 1. Поиск кандидатов на нескольких длительностях.
     for (size_t windowFrames : windowSizes)
     {
         if (windowFrames < 16 ||
@@ -623,16 +623,11 @@ bool separateRepeatedComponents(
         std::vector<CandidatePair> candidates =
             findCandidates(input, windowFrames, hopFrames);
 
-        // Максимальное смещение ограничено половиной шага поиска.
         const size_t maxShift =
             std::max<size_t>(1, hopFrames / 2);
 
-        // Этап 2. Подробное сравнение с временным выравниванием.
         for (const CandidatePair& candidate : candidates)
         {
-            size_t first = candidate.first;
-            size_t second = candidate.second;
-
             int offset = 0;
             double gainLeft = 1.0;
             double gainRight = 1.0;
@@ -640,8 +635,8 @@ bool separateRepeatedComponents(
 
             if (!compareFragments(
                 input,
-                first,
-                second,
+                candidate.first,
+                candidate.second,
                 windowFrames,
                 maxShift,
                 settings,
@@ -653,70 +648,234 @@ bool separateRepeatedComponents(
                 continue;
             }
 
-            size_t alignedSecond =
-                static_cast<size_t>(
-                    static_cast<long long>(second) + offset
-                    );
+            long long aligned =
+                static_cast<long long>(candidate.second) + offset;
 
-            if (rangeOverlaps(occupiedRanges, first, windowFrames) ||
-                rangeOverlaps(occupiedRanges, alignedSecond, windowFrames))
-            {
+            if (aligned < 0 ||
+                static_cast<uint64_t>(aligned) + windowFrames >
+                input.frameCount)
                 continue;
-            }
 
             Match match = {};
-            match.first = first;
-            match.second = alignedSecond;
+            match.first = candidate.first;
+            match.second = static_cast<size_t>(aligned);
             match.length = windowFrames;
             match.offset = offset;
             match.gainLeft = gainLeft;
             match.gainRight = gainRight;
             match.score = score;
 
-            matches.push_back(match);
-
-            occupiedRanges.emplace(first, first + windowFrames);
-            occupiedRanges.emplace(alignedSecond, alignedSecond + windowFrames);
+            matchesByLength[windowFrames].push_back(match);
         }
     }
 
-    // Этап 3. Формирование повторяющейся составляющей.
-    for (const Match& match : matches)
+    // Этап 2. Объединяем пары в группы связанных вхождений.
+    struct Link
     {
-        for (size_t i = 0; i < match.length; ++i)
+        size_t other;
+        double gainLeft;
+        double gainRight;
+    };
+
+    std::map<size_t, size_t> occupiedRanges;
+
+    for (const auto& lengthEntry : matchesByLength)
+    {
+        size_t windowFrames = lengthEntry.first;
+        const std::vector<Match>& matches = lengthEntry.second;
+
+        // Каждой уникальной позиции соответствует один узел.
+        std::map<size_t, size_t> nodeIndex;
+        std::vector<size_t> positions;
+
+        for (const Match& match : matches)
         {
-            for (unsigned int ch = 0;
-                ch < input.channels;
-                ++ch)
-            {
-                size_t indexA =
-                    (match.first + i) * input.channels + ch;
-
-                size_t indexB =
-                    (match.second + i) * input.channels + ch;
-
-                double gain =
-                    ch == 0 ? match.gainLeft : match.gainRight;
-
-                double a = input.samples[indexA];
-                double b = input.samples[indexB];
-
-                double common =
-                    0.5 * (a + b / gain);
-
-                repeated.samples[indexA] =
-                    static_cast<float>(common);
-
-                repeated.samples[indexB] =
-                    static_cast<float>(gain * common);
-            }
+            nodeIndex.emplace(match.first, 0);
+            nodeIndex.emplace(match.second, 0);
         }
 
-        ++result.groups;
-        result.occurrences += 2;
+        for (auto& entry : nodeIndex)
+        {
+            entry.second = positions.size();
+            positions.push_back(entry.first);
+        }
+
+        std::vector<std::vector<Link>> graph(positions.size());
+
+        // Ребро хранит отношение амплитуд второго вхождения
+        // к первому. Для обратного направления используется
+        // обратное отношение.
+        for (const Match& match : matches)
+        {
+            size_t a = nodeIndex.at(match.first);
+            size_t b = nodeIndex.at(match.second);
+
+            if (std::abs(match.gainLeft) < 1e-12 ||
+                std::abs(match.gainRight) < 1e-12)
+                continue;
+
+            graph[a].push_back({
+                b,
+                match.gainLeft,
+                match.gainRight
+                });
+
+            graph[b].push_back({
+                a,
+                1.0 / match.gainLeft,
+                1.0 / match.gainRight
+                });
+        }
+
+        std::vector<bool> visited(positions.size(), false);
+
+        // Этап 3. Обрабатываем каждую связанную группу.
+        for (size_t root = 0; root < positions.size(); ++root)
+        {
+            if (visited[root])
+                continue;
+
+            std::vector<size_t> queue;
+            std::vector<size_t> group;
+
+            std::vector<double> relativeGainLeft(
+                positions.size(), 1.0);
+
+            std::vector<double> relativeGainRight(
+                positions.size(), 1.0);
+
+            visited[root] = true;
+            queue.push_back(root);
+
+            for (size_t q = 0; q < queue.size(); ++q)
+            {
+                size_t current = queue[q];
+                group.push_back(current);
+
+                for (const Link& link : graph[current])
+                {
+                    size_t next = link.other;
+
+                    if (visited[next])
+                        continue;
+
+                    relativeGainLeft[next] =
+                        relativeGainLeft[current] * link.gainLeft;
+
+                    relativeGainRight[next] =
+                        relativeGainRight[current] * link.gainRight;
+
+                    if (!std::isfinite(relativeGainLeft[next]) ||
+                        !std::isfinite(relativeGainRight[next]) ||
+                        std::abs(relativeGainLeft[next]) < 1e-12 ||
+                        std::abs(relativeGainRight[next]) < 1e-12)
+                    {
+                        continue;
+                    }
+
+                    visited[next] = true;
+                    queue.push_back(next);
+                }
+            }
+
+            // Оставляем только группы с нужным количеством вхождений.
+            if (group.size() < settings.minOccurrences)
+                continue;
+
+            // Позиции узлов отсортированы по времени.
+            // Проверяем, что вхождения внутри группы не перекрываются.
+            bool validGroup = true;
+
+            for (size_t i = 1; i < group.size(); ++i)
+            {
+                size_t previous = positions[group[i - 1]];
+                size_t current = positions[group[i]];
+
+                if (current - previous < windowFrames)
+                {
+                    validGroup = false;
+                    break;
+                }
+            }
+
+            if (!validGroup)
+                continue;
+
+            // Не допускаем перекрытия с уже обработанными группами.
+            for (size_t node : group)
+            {
+                if (rangeOverlaps(
+                    occupiedRanges,
+                    positions[node],
+                    windowFrames))
+                {
+                    validGroup = false;
+                    break;
+                }
+            }
+
+            if (!validGroup)
+                continue;
+
+            // Вычисляем общий шаблон повторяющегося звука.
+            // Каждый экземпляр предварительно приводится
+            // к амплитуде корневого вхождения.
+            for (size_t i = 0; i < windowFrames; ++i)
+            {
+                for (unsigned int ch = 0;
+                    ch < input.channels;
+                    ++ch)
+                {
+                    double sum = 0.0;
+
+                    for (size_t node : group)
+                    {
+                        size_t index =
+                            (positions[node] + i) * input.channels + ch;
+
+                        double gain = ch == 0
+                            ? relativeGainLeft[node]
+                            : relativeGainRight[node];
+
+                        sum += input.samples[index] / gain;
+                    }
+
+                    double common =
+                        sum / static_cast<double>(group.size());
+
+                    // Восстанавливаем каждый экземпляр
+                    // с его исходным относительным усилением.
+                    for (size_t node : group)
+                    {
+                        size_t index =
+                            (positions[node] + i) * input.channels + ch;
+
+                        double gain = ch == 0
+                            ? relativeGainLeft[node]
+                            : relativeGainRight[node];
+
+                        repeated.samples[index] =
+                            static_cast<float>(common * gain);
+                    }
+                }
+            }
+
+            // Помечаем всю группу после её обработки.
+            for (size_t node : group)
+            {
+                size_t start = positions[node];
+
+                occupiedRanges.emplace(
+                    start,
+                    start + windowFrames
+                );
+            }
+
+            ++result.groups;
+            result.occurrences += group.size();
+        }
     }
 
-    // Этап 4. Остаток рассчитывается вычитанием.
     // Поэтому сумма выходов восстанавливает исходный сигнал.
     for (size_t i = 0; i < input.samples.size(); ++i)
     {
