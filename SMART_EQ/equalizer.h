@@ -104,6 +104,20 @@ struct DeclipSegment
     std::uint64_t length = 0;   // длина серии в отсчётах
 };
 
+struct SmearedCeilingDiagnostic
+{
+    std::size_t channel = 0;
+    int polarity = 1; // +1 or -1
+    bool fitted = false;
+    bool smearedEvidence = false;
+    double peak = 0.0;
+    double theta = 0.0;
+    double sigma = 0.0;
+    double knee = 0.0;
+    double bumpRatio = 0.0;
+    std::uint64_t touchEvents = 0;
+};
+
 struct DeclipResult
 {
     std::uint64_t runs = 0;
@@ -151,6 +165,7 @@ struct DeclipResult
     std::uint64_t legacyRejectedOverlapSamples = 0;
     std::uint64_t legacySkippedOverlapRuns = 0;
     std::uint64_t legacySkippedOverlapSamples = 0;
+    std::vector<SmearedCeilingDiagnostic> smearedCeilings;
     std::vector<DeclipSegment> segments;
 };
 
