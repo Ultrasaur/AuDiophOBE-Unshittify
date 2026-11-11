@@ -1192,12 +1192,12 @@ bool separateRepeatedComponents(
     const std::chrono::duration<double> totalTime = totalEnd - totalStart;
 
     std::cerr
-        << "\\n[Repetition timing]\\n"
-        << "Candidate generation: " << candidateGenerationTime.count() << " s\\n"
-        << "Fragment comparison: " << comparisonTime.count() << " s\\n"
-        << "Grouping: " << groupingTime.count() << " s\\n"
-        << "Residual creation: " << residualTime.count() << " s\\n"
-        << "Total: " << totalTime.count() << " s\\n";
+        << "\n[Repetition timing]\n"
+        << "Candidate generation: " << candidateGenerationTime.count() << " s\n"
+        << "Fragment comparison: " << comparisonTime.count() << " s\n"
+        << "Grouping: " << groupingTime.count() << " s\n"
+        << "Residual creation: " << residualTime.count() << " s\n"
+        << "Total: " << totalTime.count() << " s\n";
 
     error.clear();
     return true;
