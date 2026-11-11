@@ -24,7 +24,7 @@ struct EqualizerSettings
 
     bool declip = false;            // восстановление срезанных пиков
     double declipCeilingDb = -1.0;  // целевой конечный предел пика, dBFS
-    double declipOvershootDb = 6.0;  // допустимое превышение при локальной обработке, dB
+    double declipOvershootDb = 2.0;  // допустимое превышение при локальной обработке, dB
     double repeatedPreservationPriority = 50.0; // 0 = residual, 100 = repeated
     double declipFadeMs = 40.0;     // длительность плавного спада общей коррекции, мс
     double declipAttackMs = 5.0;    // Attack многополосного снижения, мс
