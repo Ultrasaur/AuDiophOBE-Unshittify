@@ -7,6 +7,8 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include <map>
+#include <iterator>
 
 namespace
 {
@@ -96,6 +98,61 @@ namespace
         return std::min(key, inverted);
     }
 
+    bool coarseCompareFragments(
+        const AudioData& audio,
+        size_t first,
+        size_t second,
+        size_t windowFrames,
+        double minCorrelation)
+    {
+        double dot[2] = {};
+        double energyA[2] = {};
+        double energyB[2] = {};
+
+        constexpr size_t sampleCount = 32;
+
+        for (size_t i = 0; i < sampleCount; ++i)
+        {
+            size_t offset =
+                i * (windowFrames - 1) / (sampleCount - 1);
+
+            for (unsigned int ch = 0; ch < audio.channels; ++ch)
+            {
+                double a = audio.samples[
+                    (first + offset) * audio.channels + ch];
+
+                double b = audio.samples[
+                    (second + offset) * audio.channels + ch];
+
+                dot[ch] += a * b;
+                energyA[ch] += a * a;
+                energyB[ch] += b * b;
+            }
+        }
+
+        // Предварительная проверка намеренно мягче
+        // окончательного критерия корреляции.
+        double coarseThreshold = minCorrelation * 0.75;
+
+        for (unsigned int ch = 0; ch < audio.channels; ++ch)
+        {
+            if (energyA[ch] < 1e-12 ||
+                energyB[ch] < 1e-12)
+            {
+                continue;
+            }
+
+            double correlation =
+                std::abs(dot[ch]) /
+                std::sqrt(energyA[ch] * energyB[ch]);
+
+            if (correlation < coarseThreshold)
+                return false;
+        }
+
+        return true;
+    }
+
     // Проверяет фрагменты с небольшим временным смещением.
     // Усиление левого и правого каналов определяется отдельно.
     bool compareFragments(
@@ -129,6 +186,16 @@ namespace
             if (static_cast<uint64_t>(alignedSecond) +
                 windowFrames > audio.frameCount)
                 continue;
+
+            if (!coarseCompareFragments(
+                audio,
+                first,
+                second,
+                windowFrames,
+                settings.minCorrelation))
+            {
+                return false;
+            }
 
             double dot[2] = {};
             double energyA[2] = {};
@@ -215,12 +282,27 @@ namespace
         return found;
     }
 
-    bool rangesOverlap(
-        size_t a,
-        size_t b,
+    bool rangeOverlaps(
+        const std::map<size_t, size_t>& ranges,
+        size_t start,
         size_t length)
     {
-        return a < b + length && b < a + length;
+        size_t end = start + length;
+
+        auto next = ranges.lower_bound(start);
+
+        if (next != ranges.end() && next->first < end)
+            return true;
+
+        if (next != ranges.begin())
+        {
+            auto previous = std::prev(next);
+
+            if (previous->second > start)
+                return true;
+        }
+
+        return false;
     }
 
     // Создаёт набор длительностей для многоуровневого поиска.
@@ -425,10 +507,7 @@ bool separateRepeatedComponents(
         0.0f
     );
 
-    std::vector<bool> occupied(
-        static_cast<size_t>(input.frameCount),
-        false
-    );
+    std::map<size_t, size_t> occupiedRanges;
 
     std::vector<Match> matches;
 
@@ -477,20 +556,11 @@ bool separateRepeatedComponents(
                     static_cast<long long>(second) + offset
                     );
 
-            bool overlap = false;
-
-            for (size_t i = 0; i < windowFrames; ++i)
+            if (rangeOverlaps(occupiedRanges, first, windowFrames) ||
+                rangeOverlaps(occupiedRanges, second, windowFrames))
             {
-                if (occupied[first + i] ||
-                    occupied[alignedSecond + i])
-                {
-                    overlap = true;
-                    break;
-                }
-            }
-
-            if (overlap)
                 continue;
+            }
 
             Match match = {};
             match.first = first;
@@ -503,11 +573,8 @@ bool separateRepeatedComponents(
 
             matches.push_back(match);
 
-            for (size_t i = 0; i < windowFrames; ++i)
-            {
-                occupied[first + i] = true;
-                occupied[alignedSecond + i] = true;
-            }
+            occupiedRanges.emplace(first, first + windowFrames);
+            occupiedRanges.emplace(alignedSecond, alignedSecond + windowFrames);
         }
     }
 
