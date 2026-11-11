@@ -1006,6 +1006,135 @@ int main()
                     originalAudio.samples.clear();
                     originalAudio.samples.shrink_to_fit();
 
+                    // First attenuate each repeated sound as a whole. The
+                    // same scalar gain is used for every occurrence and channel.
+                    // All gains are calculated before any repeated samples are changed.
+                    if (hasRepeatedGroups)
+                    {
+                        const double ceiling = pow(
+                            10.0, settings.declipCeilingDb / 20.0);
+
+                        vector<double> groupGains(
+                            repetitions.groupDetails.size(), 1.0);
+
+                        for (size_t groupIndex = 0;
+                            groupIndex < repetitions.groupDetails.size();
+                            ++groupIndex)
+                        {
+                            const RepetitionGroup& group =
+                                repetitions.groupDetails[groupIndex];
+
+                            double groupGain = 1.0;
+
+                            for (const RepetitionOccurrence& occurrence : group.occurrences)
+                            {
+                                if (occurrence.start >= audio.frameCount)
+                                    continue;
+
+                                const size_t endFrame = min(
+                                    static_cast<size_t>(audio.frameCount),
+                                    occurrence.start + group.length);
+
+                                for (size_t frame = occurrence.start;
+                                    frame < endFrame; ++frame)
+                                {
+                                    for (size_t channel = 0;
+                                        channel < audio.channels; ++channel)
+                                    {
+                                        const size_t sampleIndex =
+                                            frame * audio.channels + channel;
+
+                                        const double repeatedValue =
+                                            repeatedProcessed.samples[sampleIndex];
+                                        const double residualValue =
+                                            residualAudio.samples[sampleIndex];
+                                        const double mixed =
+                                            repeatedValue + residualValue;
+
+                                        // Reduce the repeated component only
+                                        // when it pushes an otherwise safe
+                                        // residual farther beyond the ceiling.
+                                        if (mixed > ceiling &&
+                                            repeatedValue > 1e-12)
+                                        {
+                                            const double allowed =
+                                                (ceiling - residualValue) /
+                                                repeatedValue;
+
+                                            if (allowed >= 0.0)
+                                            {
+                                                groupGain = min(
+                                                    groupGain, allowed);
+                                            }
+                                        }
+                                        else if (mixed < -ceiling &&
+                                            repeatedValue < -1e-12)
+                                        {
+                                            const double allowed =
+                                                (-ceiling - residualValue) /
+                                                repeatedValue;
+
+                                            if (allowed >= 0.0)
+                                            {
+                                                groupGain = min(
+                                                    groupGain, allowed);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            groupGains[groupIndex] =
+                                clamp(groupGain, 0.0, 1.0);
+                        }
+
+                        // Apply each group's gain uniformly to all of its
+                        // occurrences. The detector rejects overlapping groups;
+                        // this pass also avoids multiplying gains during analysis.
+                        for (size_t groupIndex = 0;
+                            groupIndex < repetitions.groupDetails.size();
+                            ++groupIndex)
+                        {
+                            const double groupGain = groupGains[groupIndex];
+
+                            if (groupGain >= 0.999999)
+                                continue;
+
+                            const RepetitionGroup& group =
+                                repetitions.groupDetails[groupIndex];
+
+                            for (const RepetitionOccurrence& occurrence : group.occurrences)
+                            {
+                                if (occurrence.start >= audio.frameCount)
+                                    continue;
+
+                                const size_t endFrame = min(
+                                    static_cast<size_t>(audio.frameCount),
+                                    occurrence.start + group.length);
+
+                                for (size_t frame = occurrence.start;
+                                    frame < endFrame; ++frame)
+                                {
+                                    for (size_t channel = 0;
+                                        channel < audio.channels; ++channel)
+                                    {
+                                        repeatedProcessed.samples[
+                                            frame * audio.channels + channel] *=
+                                            static_cast<float>(groupGain);
+                                    }
+                                }
+                            }
+                        }
+
+                        // Refresh the mix before residual-only multiband analysis.
+                        for (size_t i = 0; i < audio.samples.size(); ++i)
+                        {
+                            audio.samples[i] =
+                                repeatedProcessed.samples[i] +
+                                residualAudio.samples[i];
+                        }
+                    }
+
                     // Peak detection sees the full mix; the reducers modify
                     // only the non-repeating residual.
                     AudioData& bandTarget = hasRepeatedGroups
@@ -1067,100 +1196,6 @@ int main()
                             L"Applying peak reduction"
                         )
                     );
-
-                    if (hasRepeatedGroups)
-                    {
-                        const double ceiling = pow(
-                            10.0, settings.declipCeilingDb / 20.0);
-
-                        // One gain per repeated group, shared by every
-                        // occurrence and channel in that group.
-                        for (const RepetitionGroup& group : repetitions.groupDetails)
-                        {
-                            double groupGain = 1.0;
-
-                            for (const RepetitionOccurrence& occurrence : group.occurrences)
-                            {
-                                if (occurrence.start >= audio.frameCount)
-                                    continue;
-
-                                const size_t endFrame = min(
-                                    static_cast<size_t>(audio.frameCount),
-                                    occurrence.start + group.length);
-
-                                for (size_t frame = occurrence.start;
-                                    frame < endFrame; ++frame)
-                                {
-                                    for (size_t channel = 0;
-                                        channel < audio.channels; ++channel)
-                                    {
-                                        const size_t sampleIndex =
-                                            frame * audio.channels + channel;
-
-                                        const double repeatedValue =
-                                            repeatedProcessed.samples[sampleIndex];
-                                        const double residualValue =
-                                            residualAudio.samples[sampleIndex];
-                                        const double mixed =
-                                            repeatedValue + residualValue;
-
-                                        if (mixed > ceiling &&
-                                            repeatedValue > 1e-12 &&
-                                            residualValue < ceiling)
-                                        {
-                                            groupGain = min(
-                                                groupGain,
-                                                (ceiling - residualValue) /
-                                                repeatedValue);
-                                        }
-                                        else if (mixed < -ceiling &&
-                                            repeatedValue < -1e-12 &&
-                                            residualValue > -ceiling)
-                                        {
-                                            groupGain = min(
-                                                groupGain,
-                                                (-ceiling - residualValue) /
-                                                repeatedValue);
-                                        }
-                                    }
-                                }
-                            }
-
-                            groupGain = clamp(groupGain, 0.0, 1.0);
-
-                            if (groupGain < 0.999999)
-                            {
-                                for (const RepetitionOccurrence& occurrence : group.occurrences)
-                                {
-                                    if (occurrence.start >= audio.frameCount)
-                                        continue;
-
-                                    const size_t endFrame = min(
-                                        static_cast<size_t>(audio.frameCount),
-                                        occurrence.start + group.length);
-
-                                    for (size_t frame = occurrence.start;
-                                        frame < endFrame; ++frame)
-                                    {
-                                        for (size_t channel = 0;
-                                            channel < audio.channels; ++channel)
-                                        {
-                                            repeatedProcessed.samples[
-                                                frame * audio.channels + channel] *=
-                                                static_cast<float>(groupGain);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        for (size_t i = 0; i < audio.samples.size(); ++i)
-                        {
-                            audio.samples[i] =
-                                repeatedProcessed.samples[i] +
-                                residualAudio.samples[i];
-                        }
-                    }
 
                     if (bands.affectedFrames > 0 || !residual.regions.empty())
                     {
