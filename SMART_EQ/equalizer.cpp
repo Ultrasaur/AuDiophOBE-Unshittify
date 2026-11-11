@@ -1859,6 +1859,10 @@ DeclipResult declipAudio(
 
                 runs.push_back(run);
             }
+            else
+            {
+                ++result.legacyShortRuns;
+            }
         }
 
         // Восстановление найденных серий
@@ -1875,12 +1879,19 @@ DeclipResult declipAudio(
             const size_t first = run.first;
             const size_t last = run.first + run.length - 1;
 
-            if (run.length > maxRunLength ||
-                first < 2 ||
-                last + 2 >= frames)
+            if (run.length > maxRunLength)
             {
                 result.skipped++;
                 result.legacySkippedRuns++;
+                result.legacyTooLongRuns++;
+                continue;
+            }
+
+            if (first < 2 || last + 2 >= frames)
+            {
+                result.skipped++;
+                result.legacySkippedRuns++;
+                result.legacyEdgeRuns++;
                 continue;
             }
 
