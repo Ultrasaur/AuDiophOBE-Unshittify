@@ -131,6 +131,16 @@ struct DeclipResult
     std::uint64_t legacyShortPeak98To999 = 0;
     std::uint64_t legacyShortPeak999Plus = 0;
     std::uint64_t legacySkippedRuns = 0;
+    std::uint64_t legacyCandidateNoOverlapRuns = 0;
+    std::uint64_t legacyCandidatePartialOverlapRuns = 0;
+    std::uint64_t legacyCandidateFullOverlapRuns = 0;
+    std::uint64_t legacyCandidateOverlapSamples = 0;
+    std::uint64_t legacyRestoredOverlapRuns = 0;
+    std::uint64_t legacyRestoredOverlapSamples = 0;
+    std::uint64_t legacyRejectedOverlapRuns = 0;
+    std::uint64_t legacyRejectedOverlapSamples = 0;
+    std::uint64_t legacySkippedOverlapRuns = 0;
+    std::uint64_t legacySkippedOverlapSamples = 0;
     std::vector<DeclipSegment> segments;
 };
 
@@ -146,7 +156,8 @@ DeclipResult declipAudio(
     const ProgressCallback& progress = {},
     const AudioData* repeatedComponents = nullptr,
     const AudioData* residualAudio = nullptr,
-    const RepetitionResult* repetitions = nullptr);
+    const RepetitionResult* repetitions = nullptr,
+    const AudioData* originalAudio = nullptr);
 
 // План локального снижения громкости: каждый кадр выше потолка (после восстановления
 // пиков) требует усиления меньше единицы. Кривая усиления строится плавной,
