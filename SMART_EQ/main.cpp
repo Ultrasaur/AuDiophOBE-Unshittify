@@ -883,6 +883,12 @@ int main()
                     repetitionReady ? &repetitions : nullptr
                 );
 
+                // The decomposition buffers are no longer needed after declipping.
+                repeatedComponents.samples.clear();
+                repeatedComponents.samples.shrink_to_fit();
+                residualAudio.samples.clear();
+                residualAudio.samples.shrink_to_fit();
+
                 if (declip.runs > 0 || declip.skipped > 0)
                 {
                     wostringstream info;
