@@ -17,7 +17,7 @@ struct RepetitionSettings
     size_t searchHopMs = 10;
 
     // Минимальная степень сходства
-    double minCorrelation = 0.98;
+    double minCorrelation = 0.96;
 
     // Допустимое изменение амплитуды
     double minGain = 0.25;
