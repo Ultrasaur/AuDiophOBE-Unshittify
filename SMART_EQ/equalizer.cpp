@@ -1446,10 +1446,9 @@ DeclipResult declipAudio(
             channels, vector<double>(blockCount, 0.0));
         vector<vector<double>> negativeLimits(
             channels, vector<double>(blockCount, 0.0));
-        vector<vector<uint8_t>> rawClipped(
-            channels, vector<uint8_t>(frames, 0));
-
         // Use the same one-second local ceilings as the existing declipper.
+        // Clipping is assessed on the isolated repeated component, not on the
+        // complete mix: another sound may be responsible for a clipped mix peak.
         for (size_t ch = 0; ch < channels; ++ch)
         {
             for (size_t f = 0; f < frames; ++f)
@@ -1460,50 +1459,6 @@ DeclipResult declipAudio(
                     max(positiveLimits[ch][block], value);
                 negativeLimits[ch][block] =
                     min(negativeLimits[ch][block], value);
-            }
-
-            size_t f = 0;
-            while (f < frames)
-            {
-                const size_t block = f / blockSize;
-                const double value = audio.samples[f * channels + ch];
-                const bool onCeiling =
-                    (value > 0.0 &&
-                        positiveLimits[ch][block] >= MIN_CEILING &&
-                        value >= positiveLimits[ch][block] * (1.0 - CLIP_TOLERANCE)) ||
-                    (value < 0.0 &&
-                        negativeLimits[ch][block] <= -MIN_CEILING &&
-                        value <= negativeLimits[ch][block] * (1.0 - CLIP_TOLERANCE));
-
-                if (!onCeiling)
-                {
-                    ++f;
-                    continue;
-                }
-
-                const size_t first = f;
-                while (f < frames)
-                {
-                    const size_t b = f / blockSize;
-                    const double v = audio.samples[f * channels + ch];
-                    const bool stillOnCeiling =
-                        (v > 0.0 &&
-                            positiveLimits[ch][b] >= MIN_CEILING &&
-                            v >= positiveLimits[ch][b] * (1.0 - CLIP_TOLERANCE)) ||
-                        (v < 0.0 &&
-                            negativeLimits[ch][b] <= -MIN_CEILING &&
-                            v <= negativeLimits[ch][b] * (1.0 - CLIP_TOLERANCE));
-
-                    if (!stillOnCeiling)
-                        break;
-                    ++f;
-                }
-
-                if (f - first >= minRunLength)
-                {
-                    for (size_t k = first; k < f; ++k)
-                        rawClipped[ch][k] = 1;
-                }
             }
         }
 
@@ -1527,12 +1482,6 @@ DeclipResult declipAudio(
                     const size_t frame = occurrence.start + i;
                     for (size_t ch = 0; ch < channels; ++ch)
                     {
-                        if (rawClipped[ch][frame])
-                        {
-                            clean = false;
-                            break;
-                        }
-
                         const double component = repeatedComponents->samples[
                             frame * channels + ch];
                         const size_t block = frame / blockSize;
