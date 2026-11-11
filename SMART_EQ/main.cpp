@@ -1262,17 +1262,68 @@ int main()
                         )
                     );
 
+                    // If no multiband event was recorded, use a short neutral
+                    // excerpt around the strongest sample so the diagnostic graph
+                    // can still be generated with zero band correction.
+                    if (bands.eventBefore.size() < 2 &&
+                        bandTarget.channels > 0 &&
+                        bandTarget.frameCount > 1 &&
+                        bandTarget.samples.size() ==
+                            bandTarget.frameCount * bandTarget.channels)
+                    {
+                        const size_t frameCount =
+                            static_cast<size_t>(bandTarget.frameCount);
+                        size_t peakFrame = 0;
+                        double peakMagnitude = 0.0;
+
+                        for (size_t frame = 0; frame < frameCount; frame++)
+                        {
+                            const double magnitude = abs(static_cast<double>(
+                                bandTarget.samples[frame * bandTarget.channels]));
+
+                            if (magnitude > peakMagnitude)
+                            {
+                                peakMagnitude = magnitude;
+                                peakFrame = frame;
+                            }
+                        }
+
+                        const size_t eventHalf = max<size_t>(
+                            200,
+                            static_cast<size_t>(bands.sampleRate * 0.01));
+                        const size_t eventStart =
+                            peakFrame > eventHalf ? peakFrame - eventHalf : 0;
+                        const size_t eventEnd = min(
+                            frameCount,
+                            peakFrame + eventHalf + 1);
+
+                        bands.eventStart = eventStart;
+                        bands.eventBefore.resize(eventEnd - eventStart);
+                        bands.eventAfter.resize(eventEnd - eventStart);
+
+                        for (size_t frame = eventStart; frame < eventEnd; frame++)
+                        {
+                            const float sample = bandTarget.samples[
+                                frame * bandTarget.channels];
+
+                            bands.eventBefore[frame - eventStart] = sample;
+                            bands.eventAfter[frame - eventStart] = sample;
+                        }
+                    }
+
+                    // Always save the bands diagnostic whenever this processing
+                    // stage runs, even when no reduction was necessary.
+                    saveBandReductionGraph(
+                        bands,
+                        residual,
+                        workingCeilingDb,
+                        job.graphBands,
+                        graphTitle,
+                        graphError
+                    );
+
                     if (bands.affectedFrames > 0 || !residual.regions.empty())
                     {
-                        saveBandReductionGraph(
-                            bands,
-                            residual,
-                            workingCeilingDb,
-                            job.graphBands,
-                            graphTitle,
-                            graphError
-                        );
-
                         wostringstream info;
 
                         info << fixed << setprecision(1)
