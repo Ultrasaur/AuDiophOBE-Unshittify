@@ -111,12 +111,19 @@ struct DeclipResult
     std::vector<DeclipSegment> segments;  // где именно выполнено восстановление
 };
 
-// Восстановление срезанных пиков во временной области
+// Восстановление срезанных пиков во временной области.
+// Если переданы результаты разделения повторяющихся компонентов,
+// чистые вхождения защищаются, а клипующие восстанавливаются по ним.
+struct RepetitionResult;
+
 DeclipResult declipAudio(
     AudioData& audio,
     size_t minRunLength,
     size_t maxRunLength,
-    const ProgressCallback& progress = {});
+    const ProgressCallback& progress = {},
+    const AudioData* repeatedComponents = nullptr,
+    const AudioData* residualAudio = nullptr,
+    const RepetitionResult* repetitions = nullptr);
 
 // План локального снижения громкости: каждый кадр выше потолка (после восстановления
 // пиков) требует усиления меньше единицы. Кривая усиления строится плавной,
