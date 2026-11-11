@@ -897,11 +897,64 @@ int main()
                     repetitionReady ? &repetitions : nullptr
                 );
 
-                // The decomposition buffers are no longer needed after declipping.
-                repeatedComponents.samples.clear();
-                repeatedComponents.samples.shrink_to_fit();
-                residualAudio.samples.clear();
-                residualAudio.samples.shrink_to_fit();
+                const bool hasRepeatedGroups =
+                    repetitionReady && repetitions.groups > 0 &&
+                    !repetitions.groupDetails.empty();
+
+                AudioData repeatedProcessed;
+                vector<uint8_t> repeatedFrames(
+                    static_cast<size_t>(audio.frameCount), 0);
+
+                if (hasRepeatedGroups)
+                {
+                    repeatedProcessed = repeatedComponents;
+
+                    for (const RepetitionGroup& group : repetitions.groupDetails)
+                    {
+                        for (const RepetitionOccurrence& occurrence : group.occurrences)
+                        {
+                            if (occurrence.start >= audio.frameCount)
+                                continue;
+
+                            const size_t endFrame = min(
+                                static_cast<size_t>(audio.frameCount),
+                                occurrence.start + group.length);
+
+                            fill(
+                                repeatedFrames.begin() + occurrence.start,
+                                repeatedFrames.begin() + endFrame,
+                                1
+                            );
+                        }
+                    }
+
+                    // Keep the repeated component separate after declipping.
+                    // Changes inside a detected occurrence are assigned to it;
+                    // the remaining signal stays in residualAudio.
+                    for (size_t frame = 0; frame < audio.frameCount; ++frame)
+                    {
+                        for (size_t channel = 0; channel < audio.channels; ++channel)
+                        {
+                            const size_t sampleIndex =
+                                frame * audio.channels + channel;
+
+                            if (repeatedFrames[frame])
+                            {
+                                repeatedProcessed.samples[sampleIndex] =
+                                    audio.samples[sampleIndex] -
+                                    residualAudio.samples[sampleIndex];
+                            }
+                            else
+                            {
+                                repeatedProcessed.samples[sampleIndex] = 0.0f;
+                            }
+
+                            residualAudio.samples[sampleIndex] =
+                                audio.samples[sampleIndex] -
+                                repeatedProcessed.samples[sampleIndex];
+                        }
+                    }
+                }
 
                 if (declip.runs > 0 || declip.skipped > 0)
                 {
@@ -932,15 +985,21 @@ int main()
                         graphError
                     );
 
-                    // Исходная копия больше не нужна после сохранения графика.
-                    // Освобождаем память до запуска многополосной обработки.
                     originalAudio.samples.clear();
                     originalAudio.samples.shrink_to_fit();
 
-                    // Многополосное снижение громкости: тише становятся только те
-                    // полосы частот, которые создали выброс выше потолка
+                    // Peak detection sees the full mix; the reducers modify
+                    // only the non-repeating residual.
+                    AudioData& bandTarget = hasRepeatedGroups
+                        ? residualAudio
+                        : audio;
+
+                    const AudioData* fixedComponents = hasRepeatedGroups
+                        ? &repeatedProcessed
+                        : nullptr;
+
                     BandReductionPlan bands = planBandReduction(
-                        audio,
+                        bandTarget,
                         settings.declipCeilingDb,
                         settings.declipAttackMs,
                         settings.declipReferenceReleaseMs,
@@ -950,11 +1009,12 @@ int main()
                             10,
                             25,
                             L"Calculating multiband reduction"
-                        )
+                        ),
+                        fixedComponents
                     );
 
                     applyBandReduction(
-                        audio,
+                        bandTarget,
                         bands,
                         makeStageProgress(
                             35,
@@ -963,15 +1023,12 @@ int main()
                         )
                     );
 
-                    // Изменённые фрагменты уже перенесены в audio.samples.
-                    // Графикам нужны только сводные данные, поэтому большие копии
-                    // обработанных фрагментов можно освободить сразу.
                     bands.chunks.clear();
                     bands.chunks.shrink_to_fit();
 
-                    // Остаток превышения (если есть) убирается небольшим общим усилением
+                    // Local peak reduction also changes only the residual.
                     PeakReductionPlan residual = planPeakReduction(
-                        audio,
+                        bandTarget,
                         settings.declipCeilingDb,
                         settings.declipFadeMs,
                         DECLIP_GRAPH_COLUMNS,
@@ -979,11 +1036,12 @@ int main()
                             45,
                             10,
                             L"Calculating peak reduction"
-                        )
+                        ),
+                        fixedComponents
                     );
 
                     applyPeakReduction(
-                        audio,
+                        bandTarget,
                         residual,
                         makeStageProgress(
                             55,
@@ -991,6 +1049,97 @@ int main()
                             L"Applying peak reduction"
                         )
                     );
+
+                    if (hasRepeatedGroups)
+                    {
+                        const double ceiling = pow(
+                            10.0, settings.declipCeilingDb / 20.0);
+
+                        // One gain per repeated group, shared by every
+                        // occurrence and channel in that group.
+                        for (const RepetitionGroup& group : repetitions.groupDetails)
+                        {
+                            double groupGain = 1.0;
+
+                            for (const RepetitionOccurrence& occurrence : group.occurrences)
+                            {
+                                if (occurrence.start >= audio.frameCount)
+                                    continue;
+
+                                const size_t endFrame = min(
+                                    static_cast<size_t>(audio.frameCount),
+                                    occurrence.start + group.length);
+
+                                for (size_t frame = occurrence.start;
+                                    frame < endFrame; ++frame)
+                                {
+                                    for (size_t channel = 0;
+                                        channel < audio.channels; ++channel)
+                                    {
+                                        const size_t sampleIndex =
+                                            frame * audio.channels + channel;
+
+                                        const double repeatedValue =
+                                            repeatedProcessed.samples[sampleIndex];
+                                        const double residualValue =
+                                            residualAudio.samples[sampleIndex];
+                                        const double mixed =
+                                            repeatedValue + residualValue;
+
+                                        if (mixed > ceiling && repeatedValue > 1e-12)
+                                        {
+                                            groupGain = min(
+                                                groupGain,
+                                                (ceiling - residualValue) /
+                                                repeatedValue);
+                                        }
+                                        else if (mixed < -ceiling &&
+                                            repeatedValue < -1e-12)
+                                        {
+                                            groupGain = min(
+                                                groupGain,
+                                                (-ceiling - residualValue) /
+                                                repeatedValue);
+                                        }
+                                    }
+                                }
+                            }
+
+                            groupGain = clamp(groupGain, 0.0, 1.0);
+
+                            if (groupGain < 0.999999)
+                            {
+                                for (const RepetitionOccurrence& occurrence : group.occurrences)
+                                {
+                                    if (occurrence.start >= audio.frameCount)
+                                        continue;
+
+                                    const size_t endFrame = min(
+                                        static_cast<size_t>(audio.frameCount),
+                                        occurrence.start + group.length);
+
+                                    for (size_t frame = occurrence.start;
+                                        frame < endFrame; ++frame)
+                                    {
+                                        for (size_t channel = 0;
+                                            channel < audio.channels; ++channel)
+                                        {
+                                            repeatedProcessed.samples[
+                                                frame * audio.channels + channel] *=
+                                                static_cast<float>(groupGain);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        for (size_t i = 0; i < audio.samples.size(); ++i)
+                        {
+                            audio.samples[i] =
+                                repeatedProcessed.samples[i] +
+                                residualAudio.samples[i];
+                        }
+                    }
 
                     if (bands.affectedFrames > 0 || !residual.regions.empty())
                     {
@@ -1029,6 +1178,13 @@ int main()
                     }
                 }
             }
+
+            repeatedComponents.samples.clear();
+            repeatedComponents.samples.shrink_to_fit();
+            residualAudio.samples.clear();
+            residualAudio.samples.shrink_to_fit();
+            repeatedProcessed.samples.clear();
+            repeatedProcessed.samples.shrink_to_fit();
 
             // Проверка клиппинга (после восстановления, если оно включено)
             AudioQuality quality = analyzeQuality(audio);
