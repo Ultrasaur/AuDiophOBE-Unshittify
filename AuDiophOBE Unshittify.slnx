@@ -1,0 +1,7 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="SMART_EQ/SMART_EQ.vcxproj" Id="898e651a-67f6-437e-96b8-89cafb65a284" />
+</Solution>
