@@ -106,11 +106,20 @@ struct DeclipSegment
 
 struct DeclipResult
 {
-    std::uint64_t runs = 0;     // число восстановленных серий
-    std::uint64_t samples = 0;  // число восстановленных отсчётов
-    std::uint64_t skipped = 0;  // найденные серии, которые не удалось восстановить
-    // (длиннее допустимого или у границы файла)
-    std::vector<DeclipSegment> segments;  // где именно выполнено восстановление
+    std::uint64_t runs = 0;
+    std::uint64_t samples = 0;
+    std::uint64_t skipped = 0;
+    std::uint64_t repeatedGroupsWithCleanReference = 0;
+    std::uint64_t repeatedGroupsWithoutCleanReference = 0;
+    std::uint64_t repeatedOccurrencesProtected = 0;
+    std::uint64_t repeatedOccurrencesReconstructed = 0;
+    std::uint64_t repeatedRuns = 0;
+    std::uint64_t repeatedSamples = 0;
+    std::uint64_t legacyDetectedRuns = 0;
+    std::uint64_t legacyRestoredRuns = 0;
+    std::uint64_t legacyOvershootRejectedRuns = 0;
+    std::uint64_t legacySkippedRuns = 0;
+    std::vector<DeclipSegment> segments;
 };
 
 // Восстановление срезанных пиков во временной области.
