@@ -1917,6 +1917,57 @@ DeclipResult declipAudio(
 
             if (length >= minRunLength)
             {
+                // Диагностика формы кандидата; на саму обработку не влияет.
+                double minAbs = numeric_limits<double>::max();
+                double maxAbs = 0.0;
+                float minValue = numeric_limits<float>::max();
+                float maxValue = numeric_limits<float>::lowest();
+
+                for (size_t k = 0; k < length; ++k)
+                {
+                    const float sample = signal[first + k];
+                    const double magnitude = abs(static_cast<double>(sample));
+
+                    minAbs = min(minAbs, magnitude);
+                    maxAbs = max(maxAbs, magnitude);
+                    minValue = min(minValue, sample);
+                    maxValue = max(maxValue, sample);
+                }
+
+                if (minValue == maxValue)
+                    ++result.legacyShapeExactFlatRuns;
+
+                const double relativeRange =
+                    (maxAbs - minAbs) / max(runPeak, 1e-12);
+
+                if (relativeRange <= 1e-6)
+                    ++result.legacyShapeRangeTightRuns;
+                else if (relativeRange <= 1e-4)
+                    ++result.legacyShapeRangeModerateRuns;
+                else
+                    ++result.legacyShapeRangeWideRuns;
+
+                const double beforeMagnitude =
+                    abs(static_cast<double>(signal[first - 1]));
+                const double afterMagnitude =
+                    abs(static_cast<double>(signal[first + length]));
+
+                if (beforeMagnitude < minAbs && afterMagnitude < minAbs)
+                    ++result.legacyShapeBothNeighborsLowerRuns;
+
+                const double neighborAsymmetry =
+                    abs(beforeMagnitude - afterMagnitude) /
+                    max(runPeak, 1e-12);
+
+                if (neighborAsymmetry <= 0.01)
+                    ++result.legacyShapeNeighborSymmetry01;
+                else if (neighborAsymmetry <= 0.05)
+                    ++result.legacyShapeNeighborSymmetry05;
+                else if (neighborAsymmetry <= 0.20)
+                    ++result.legacyShapeNeighborSymmetry20;
+                else
+                    ++result.legacyShapeNeighborAsymmetricRuns;
+
                 Run run;
                 run.first = first;
                 run.length = length;
