@@ -526,9 +526,18 @@ struct ProgressReporter
         previousLength = 0;
     }
 
-    // Диагностические сообщения отключены; обработка и прогресс не затрагиваются.
-    void note(const wstring&)
+    // Вывод диагностических сообщений с очисткой строки прогресса.
+    void note(const wstring& message)
     {
+        lock_guard<mutex> guard(lock);
+
+        if (previousLength > 0)
+        {
+            wcout << L"\r" << wstring(previousLength, L' ') << L"\r";
+            previousLength = 0;
+        }
+
+        wcout << message << endl;
     }
 
     // Файл обработан успешно
@@ -1114,6 +1123,23 @@ int main()
                 return false;
             }
 
+            const AudioQuality inputQuality = analyzeQuality(audio);
+            {
+                wostringstream info;
+                info << fixed << setprecision(3)
+                    << L"\n[Diagnostics] Input: " << job.input.filename().wstring()
+                    << L" | " << audio.sampleRate << L" Hz"
+                    << L" | " << audio.channels << L" channels"
+                    << L" | " << static_cast<double>(audio.frameCount) / audio.sampleRate
+                    << L" s"
+                    << L" | peak " << inputQuality.peakDb << L" dBFS"
+                    << L" | RMS " << inputQuality.rmsDb << L" dBFS"
+                    << L" | crest " << inputQuality.crestDb << L" dB"
+                    << L" | clipped runs " << inputQuality.clippedRuns
+                    << L" | clipped samples " << inputQuality.clippedSamples;
+                progress.note(info.str());
+            }
+
             AudioData repeatedComponents;
             AudioData residualAudio;
             AudioData repeatedProcessed;
@@ -1174,6 +1200,20 @@ int main()
                     repetitionReady ? &residualAudio : nullptr,
                     repetitionReady ? &repetitions : nullptr
                 );
+
+                {
+                    const AudioQuality restoredQuality = analyzeQuality(audio);
+                    wostringstream info;
+                    info << fixed << setprecision(3)
+                        << L"[Diagnostics] After declipping: peak "
+                        << restoredQuality.peakDb << L" dBFS"
+                        << L" | RMS " << restoredQuality.rmsDb << L" dBFS"
+                        << L" | clipped runs " << restoredQuality.clippedRuns
+                        << L" | clipped samples " << restoredQuality.clippedSamples
+                        << L" | restored runs " << declip.runs
+                        << L" | skipped runs " << declip.skipped;
+                    progress.note(info.str());
+                }
 
                 const bool hasRepeatedGroups =
                     repetitionReady && repetitions.groups > 0 &&
@@ -1259,13 +1299,40 @@ int main()
                     pow(10.0, workingCeilingDb / 20.0);
 
                 bool mixExceedsCeiling = false;
+                double mixPeak = 0.0;
+
                 for (float sample : audio.samples)
                 {
-                    if (abs(static_cast<double>(sample)) > peakCeiling)
+                    const double magnitude = abs(static_cast<double>(sample));
+                    mixPeak = max(mixPeak, magnitude);
+
+                    if (magnitude > peakCeiling)
                     {
                         mixExceedsCeiling = true;
-                        break;
                     }
+                }
+
+                {
+                    const double mixPeakDb = mixPeak > 0.0
+                        ? 20.0 * log10(mixPeak)
+                        : -200.0;
+
+                    wostringstream info;
+                    info << fixed << setprecision(3)
+                        << L"[Diagnostics] Multiband gate: working ceiling "
+                        << workingCeilingDb << L" dBFS"
+                        << L" (" << peakCeiling << L")"
+                        << L" | post-declip mix peak " << mixPeakDb << L" dBFS"
+                        << L" | declip runs " << declip.runs
+                        << L" | gate " << ((declip.runs > 0 || mixExceedsCeiling)
+                            ? L"OPEN" : L"CLOSED");
+
+                    if (declip.runs == 0 && !mixExceedsCeiling)
+                    {
+                        info << L" | reason: no restored runs and no sample exceeds ceiling";
+                    }
+
+                    progress.note(info.str());
                 }
 
                 if (declip.runs > 0 || mixExceedsCeiling)
@@ -1291,6 +1358,24 @@ int main()
                         ? residualAudio
                         : audio;
 
+                    const AudioQuality bandTargetQuality = analyzeQuality(bandTarget);
+                    {
+                        wostringstream info;
+                        info << fixed << setprecision(3)
+                            << L"[Diagnostics] Multiband target: "
+                            << (hasRepeatedGroups ? L"residual only" : L"full signal")
+                            << L" | peak " << bandTargetQuality.peakDb << L" dBFS"
+                            << L" | RMS " << bandTargetQuality.rmsDb << L" dBFS"
+                            << L" | sample rate " << bandTarget.sampleRate << L" Hz"
+                            << L" | frames " << bandTarget.frameCount
+                            << L" | working ceiling " << workingCeilingDb << L" dBFS";
+
+                        if (bandTarget.sampleRate < 40000)
+                            info << L" | WARNING: planBandReduction rejects sample rates below 40000 Hz";
+
+                        progress.note(info.str());
+                    }
+
                     BandReductionPlan bands = planBandReduction(
                         bandTarget,
                         workingCeilingDb,
@@ -1305,6 +1390,38 @@ int main()
                         ),
                         nullptr
                     );
+
+                    {
+                        size_t activeBands = 0;
+                        for (size_t band = 0; band < BAND_COUNT; ++band)
+                        {
+                            if (bands.affectedFramesByBand[band] > 0)
+                                ++activeBands;
+                        }
+
+                        double maximumBandReductionDb = 0.0;
+                        for (double reductionDb : bands.maxReductionDb)
+                            maximumBandReductionDb = min(maximumBandReductionDb, reductionDb);
+
+                        wostringstream info;
+                        info << fixed << setprecision(3)
+                            << L"[Diagnostics] Multiband plan: affected frames "
+                            << bands.affectedFrames
+                            << L" | active bands " << activeBands << L"/" << BAND_COUNT
+                            << L" | strongest reduction " << maximumBandReductionDb << L" dB";
+
+                        if (bands.affectedFrames == 0)
+                        {
+                            info << L" | no band gain was reduced";
+
+                            if (bandTargetQuality.peakDb <= workingCeilingDb + 0.001)
+                                info << L" | target peak is at or below working ceiling";
+                            else
+                                info << L" | target peak exceeds ceiling: investigate band-plan analysis";
+                        }
+
+                        progress.note(info.str());
+                    }
 
                     applyBandReduction(
                         bandTarget,
@@ -1697,11 +1814,33 @@ int main()
                 return false;
             }
 
+            const AudioQuality beforeFinalLimiterQuality = analyzeQuality(outputAudio);
+
+            {
+                wostringstream info;
+                info << fixed << setprecision(3)
+                    << L"[Diagnostics] After EQ, before final limiter: peak "
+                    << beforeFinalLimiterQuality.peakDb << L" dBFS"
+                    << L" | RMS " << beforeFinalLimiterQuality.rmsDb << L" dBFS";
+                progress.note(info.str());
+            }
+
             const double finalPeakCeilingDb =
                 settings.declip ? settings.declipCeilingDb : -1.0;
 
             const double finalGainReductionDb =
                 limitPeaks(outputAudio, finalPeakCeilingDb);
+
+            {
+                const AudioQuality finalQuality = analyzeQuality(outputAudio);
+                wostringstream info;
+                info << fixed << setprecision(3)
+                    << L"[Diagnostics] Final output: peak "
+                    << finalQuality.peakDb << L" dBFS"
+                    << L" | RMS " << finalQuality.rmsDb << L" dBFS"
+                    << L" | final whole-track gain " << finalGainReductionDb << L" dB";
+                progress.note(info.str());
+            }
 
             if (finalGainReductionDb < -0.001)
             {
