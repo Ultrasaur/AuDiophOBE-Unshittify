@@ -168,8 +168,8 @@ namespace
         double& gainLeft,
         double& gainRight,
         double& bestScore,
-        size_t& coarsePasses,
-        size_t& fullPasses)
+        bool& coarsePassed,
+        bool& fullPassed)
     {
         const size_t shiftStep =
             std::max<size_t>(1, audio.sampleRate / 8000);
@@ -201,7 +201,7 @@ namespace
                 continue;
             }
 
-            ++coarsePasses;
+            coarsePassed = true;
 
             double dot[2] = {};
             double energyA[2] = {};
@@ -271,7 +271,7 @@ namespace
             if (!valid)
                 continue;
 
-            ++fullPasses;
+            fullPassed = true;
             score /= audio.channels;
 
             if (score > bestScore)
@@ -651,8 +651,8 @@ bool separateRepeatedComponents(
             double gainLeft = 1.0;
             double gainRight = 1.0;
             double score = 0.0;
-            size_t coarsePasses = 0;
-            size_t fullPasses = 0;
+            bool coarsePassed = false;
+            bool fullPassed = false;
 
             if (!compareFragments(
                 input,
@@ -665,16 +665,16 @@ bool separateRepeatedComponents(
                 gainLeft,
                 gainRight,
                 score,
-                coarsePasses,
-                fullPasses))
+                coarsePassed,
+                fullPassed))
             {
-                totalCoarsePasses += coarsePasses;
-                totalFullPasses += fullPasses;
+                totalCoarsePasses += coarsePassed ? 1 : 0;
+                totalFullPasses += fullPassed ? 1 : 0;
                 continue;
             }
 
-            totalCoarsePasses += coarsePasses;
-            totalFullPasses += fullPasses;
+            totalCoarsePasses += coarsePassed ? 1 : 0;
+            totalFullPasses += fullPassed ? 1 : 0;
 
             long long aligned =
                 static_cast<long long>(candidate.second) + offset;
@@ -810,7 +810,14 @@ bool separateRepeatedComponents(
             if (group.size() < settings.minOccurrences)
                 continue;
 
-            // Позиции узлов отсортированы по времени.
+            // BFS не гарантирует временной порядок обхода узлов.
+            // Сортируем позиции до проверки перекрытий.
+            std::sort(group.begin(), group.end(),
+                [&](size_t a, size_t b)
+                {
+                    return positions[a] < positions[b];
+                });
+
             // Проверяем, что вхождения внутри группы не перекрываются.
             bool validGroup = true;
 
@@ -905,13 +912,13 @@ bool separateRepeatedComponents(
     }
 
     std::cerr
-        << "\\n[Repetition diagnostics]\\n"
-        << "Eligible frames: " << totalEligibleFrames << "\\n"
-        << "Candidate pairs: " << totalCandidates << "\\n"
-        << "Coarse comparisons passed: " << totalCoarsePasses << "\\n"
-        << "Full comparisons passed: " << totalFullPasses << "\\n"
-        << "Accepted groups: " << result.groups << "\\n"
-        << "Accepted occurrences: " << result.occurrences << "\\n";
+        << "\n[Repetition diagnostics]\n"
+        << "Eligible frames: " << totalEligibleFrames << "\n"
+        << "Candidate pairs: " << totalCandidates << "\n"
+        << "Candidate pairs passing coarse check: " << totalCoarsePasses << "\n"
+        << "Candidate pairs passing full check: " << totalFullPasses << "\n"
+        << "Accepted groups: " << result.groups << "\n"
+        << "Accepted occurrences: " << result.occurrences << "\n";
 
     // Поэтому сумма выходов восстанавливает исходный сигнал.
     for (size_t i = 0; i < input.samples.size(); ++i)
