@@ -56,7 +56,8 @@ bool separateRepeatedComponents(
     AudioData& residual,
     const RepetitionSettings& settings,
     RepetitionResult& result,
-    std::string& error
+    std::string& error,
+    std::string& diagnostics
 );
 
 #endif
