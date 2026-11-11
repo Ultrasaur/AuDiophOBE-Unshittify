@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <algorithm>
 #include <iomanip>
+#include <chrono>
 #include <cwctype>
 #include <sstream>
 #include <thread>
@@ -492,6 +493,15 @@ struct ProgressReporter
         drawLine(stage, file);
     }
 
+    // Очистка текущей строки перед выводом внешней диагностики
+    void clearLine()
+    {
+        lock_guard<mutex> guard(lock);
+
+        wcout << L"\r" << wstring(previousLength, L' ') << L"\r" << flush;
+        previousLength = 0;
+    }
+
     // Информационное сообщение на отдельной строке
     void note(const wstring& text)
     {
@@ -851,6 +861,8 @@ int main()
                 RepetitionSettings repetitionSettings;
                 string repetitionError;
 
+                progress.clearLine();
+
                 const bool repetitionReady = separateRepeatedComponents(
                     originalAudio,
                     repeatedComponents,
@@ -1165,6 +1177,8 @@ int main()
 
     vector<thread> threads;
 
+    const auto processingStart = chrono::steady_clock::now();
+
     for (size_t i = 0; i < threadCount; i++)
     {
         threads.emplace_back(worker);
@@ -1177,8 +1191,25 @@ int main()
 
     failedFiles += skippedFiles;
 
+    const auto processingEnd = chrono::steady_clock::now();
+    const auto elapsedMilliseconds =
+        chrono::duration_cast<chrono::milliseconds>(
+            processingEnd - processingStart
+        ).count();
+
+    const long long hours = elapsedMilliseconds / 3600000;
+    const long long minutes = (elapsedMilliseconds / 60000) % 60;
+    const long long seconds = (elapsedMilliseconds / 1000) % 60;
+    const long long milliseconds = elapsedMilliseconds % 1000;
+
     wcout << endl << endl;
     wcout << L"Processing finished." << endl;
+    wcout << L"Total elapsed time: "
+        << setfill(L'0') << setw(2) << hours << L":"
+        << setw(2) << minutes << L":"
+        << setw(2) << seconds << L"."
+        << setw(3) << milliseconds
+        << setfill(L' ') << endl;
     wcout << L"Successfully processed: "
         << successfulFiles << endl;
     wcout << L"Failed: "
