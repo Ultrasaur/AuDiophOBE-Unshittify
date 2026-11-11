@@ -717,6 +717,7 @@ int main()
         fs::path graphSpectrum;
         fs::path graphDeclip;
         fs::path graphBands;
+        fs::path graphRepeated;
         fs::path relative;
     };
 
@@ -741,16 +742,19 @@ int main()
         job.relative = relativePath;
         job.output = outputDirectory / relativePath;
         job.graphCorrection = graphsDirectory / relativePath;
-        job.graphCorrection += L".03_correction.svg";
+        job.graphCorrection += L".04_correction.svg";
 
         job.graphSpectrum = graphsDirectory / relativePath;
-        job.graphSpectrum += L".04_spectrum.svg";
+        job.graphSpectrum += L".05_spectrum.svg";
 
         job.graphDeclip = graphsDirectory / relativePath;
-        job.graphDeclip += L".02_declip.svg";
+        job.graphDeclip += L".03_declip.svg";
 
         job.graphBands = graphsDirectory / relativePath;
         job.graphBands += L".01_bands.svg";
+
+        job.graphRepeated = graphsDirectory / relativePath;
+        job.graphRepeated += L".02_repeated_components.svg";
 
         fs::create_directories(job.output.parent_path(), filesystemError);
 
@@ -851,6 +855,8 @@ int main()
             AudioData repeatedComponents;
             AudioData residualAudio;
             AudioData repeatedProcessed;
+            RepetitionResult repetitions;
+            vector<double> repeatedGroupReductionDb;
 
             // Восстановление срезанных пиков (опционально, до анализа спектра)
             if (settings.declip)
@@ -860,7 +866,6 @@ int main()
                 // Копия исходного аудио нужна только для графика сравнения
                 AudioData originalAudio = audio;
 
-                RepetitionResult repetitions;
                 RepetitionSettings repetitionSettings;
                 string repetitionError;
 
@@ -910,6 +915,8 @@ int main()
                 if (hasRepeatedGroups)
                 {
                     repeatedProcessed = std::move(repeatedComponents);
+                    repeatedGroupReductionDb.assign(
+                        repetitions.groupDetails.size(), 0.0);
 
                     for (const RepetitionGroup& group : repetitions.groupDetails)
                     {
@@ -1088,6 +1095,21 @@ int main()
                                 clamp(groupGain, 0.0, 1.0);
                         }
 
+                        // Store the actual uniform attenuation for diagnostics.
+                        for (size_t groupIndex = 0;
+                            groupIndex < groupGains.size(); ++groupIndex)
+                        {
+                            if (groupGains[groupIndex] > 0.0)
+                            {
+                                repeatedGroupReductionDb[groupIndex] =
+                                    20.0 * log10(groupGains[groupIndex]);
+                            }
+                            else
+                            {
+                                repeatedGroupReductionDb[groupIndex] = -120.0;
+                            }
+                        }
+
                         // Apply each group's gain uniformly to all of its
                         // occurrences. The detector rejects overlapping groups;
                         // this pass also avoids multiplying gains during analysis.
@@ -1232,6 +1254,18 @@ int main()
 
                         progress.note(info.str());
                     }
+                }
+
+                if (repetitionReady && !repetitions.groupDetails.empty())
+                {
+                    saveRepeatedComponentsGraph(
+                        repeatedProcessed,
+                        repetitions,
+                        repeatedGroupReductionDb,
+                        job.graphRepeated,
+                        graphTitle,
+                        graphError
+                    );
                 }
             }
 
