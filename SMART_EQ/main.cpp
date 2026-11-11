@@ -357,6 +357,22 @@ bool selectDeclip(EqualizerSettings& settings)
     }
 
     if (!readNumber(
+        L"  Maximum declipping overshoot, dB (Enter = 6): ",
+        6.0, 0.0, 10.0,
+        settings.declipOvershootDb))
+    {
+        return false;
+    }
+
+    if (!readNumber(
+        L"  Repeated-component preservation priority, % (Enter = 50): ",
+        50.0, 0.0, 100.0,
+        settings.repeatedPreservationPriority))
+    {
+        return false;
+    }
+
+    if (!readNumber(
         L"  Fade time for residual peak reduction, ms (Enter = 40): ",
         40.0, 5.0, 300.0,
         settings.declipFadeMs))
@@ -391,7 +407,9 @@ wstring getSettingsTag(const EqualizerSettings& settings)
 
     if (settings.declip)
     {
-        tag << L"_declip" << settings.declipCeilingDb << L"dB_"
+        tag << L"_declip" << settings.declipCeilingDb << L"dB_O"
+            << settings.declipOvershootDb << L"dB_P"
+            << settings.repeatedPreservationPriority << L"pct_"
             << settings.declipFadeMs << L"ms_A"
             << settings.declipAttackMs << L"ms_R"
             << settings.declipReferenceReleaseMs << L"ms";
@@ -550,6 +568,156 @@ struct ProgressReporter
     }
 };
 
+
+// Jointly optimize one repeated group and its residual.
+static double optimizeRepeatedGroup(
+    AudioData& repeated, AudioData& residual,
+    const RepetitionGroup& group, double ceiling,
+    double repeatedPriorityPercent, double smoothingMs)
+{
+    if (repeated.channels != residual.channels ||
+        repeated.frameCount != residual.frameCount ||
+        repeated.samples.size() != residual.samples.size() ||
+        repeated.channels == 0) return 1.0;
+
+    const size_t channels = repeated.channels;
+    const size_t frames = static_cast<size_t>(repeated.frameCount);
+    vector<size_t> groupFrames;
+    for (const RepetitionOccurrence& occurrence : group.occurrences)
+    {
+        if (occurrence.start >= frames) continue;
+        const size_t end = min(frames, occurrence.start + group.length);
+        for (size_t frame = occurrence.start; frame < end; ++frame)
+            groupFrames.push_back(frame);
+    }
+    if (groupFrames.empty()) return 1.0;
+    sort(groupFrames.begin(), groupFrames.end());
+    groupFrames.erase(unique(groupFrames.begin(), groupFrames.end()),
+        groupFrames.end());
+
+    const double wr = clamp(repeatedPriorityPercent / 100.0, 0.0, 1.0);
+    const double ws = 1.0 - wr;
+    const double minimumGain = 1e-4;
+    vector<float> bestResidualGains(groupFrames.size(), 1.0f);
+    double bestGain = 1.0;
+    double bestCost = numeric_limits<double>::infinity();
+
+    auto evaluate = [&](double gr, vector<float>* saved)
+    {
+        double residualLoss = 0.0;
+        vector<float> gains(groupFrames.size(), 1.0f);
+        for (size_t f = 0; f < groupFrames.size(); ++f)
+        {
+            const size_t frame = groupFrames[f];
+            double lower = 0.0, upper = 1.0;
+            for (size_t ch = 0; ch < channels; ++ch)
+            {
+                const size_t index = frame * channels + ch;
+                const double a = repeated.samples[index] * gr;
+                const double b = residual.samples[index];
+                if (abs(b) < 1e-15)
+                {
+                    if (abs(a) > ceiling) return numeric_limits<double>::infinity();
+                    continue;
+                }
+                const double x1 = (-ceiling - a) / b;
+                const double x2 = ( ceiling - a) / b;
+                lower = max(lower, min(x1, x2));
+                upper = min(upper, max(x1, x2));
+            }
+            lower = max(lower, 0.0);
+            upper = min(upper, 1.0);
+            if (lower > upper + 1e-12)
+                return numeric_limits<double>::infinity();
+            const float gs = static_cast<float>(clamp(upper, 0.0, 1.0));
+            gains[f] = gs;
+            if (gs < 1.0f)
+            {
+                const double db = 20.0 * log10(max(
+                    static_cast<double>(gs), minimumGain));
+                residualLoss += db * db;
+            }
+        }
+        const double grDb = 20.0 * log10(max(gr, minimumGain));
+        const double meanResidualLoss =
+            residualLoss / static_cast<double>(groupFrames.size());
+        const double cost = wr * grDb * grDb + ws * meanResidualLoss;
+        if (saved) *saved = move(gains);
+        return cost;
+    };
+
+    constexpr size_t GRID = 200;
+    size_t bestIndex = GRID;
+    for (size_t i = 0; i <= GRID; ++i)
+    {
+        const double gr = minimumGain + (1.0 - minimumGain) * i / GRID;
+        const double cost = evaluate(gr, nullptr);
+        if (cost < bestCost)
+        {
+            bestCost = cost;
+            bestGain = gr;
+            bestIndex = i;
+        }
+    }
+    if (!isfinite(bestCost)) return 1.0;
+
+    double left = minimumGain + (1.0 - minimumGain) *
+        (bestIndex == 0 ? 0 : bestIndex - 1) / GRID;
+    double right = minimumGain + (1.0 - minimumGain) *
+        (bestIndex == GRID ? GRID : bestIndex + 1) / GRID;
+    const double golden = 0.6180339887498948482;
+    double x1 = right - golden * (right - left);
+    double x2 = left + golden * (right - left);
+    double f1 = evaluate(x1, nullptr), f2 = evaluate(x2, nullptr);
+    for (int i = 0; i < 36; ++i)
+    {
+        if (f1 <= f2)
+        {
+            right = x2; x2 = x1; f2 = f1;
+            x1 = right - golden * (right - left);
+            f1 = evaluate(x1, nullptr);
+        }
+        else
+        {
+            left = x1; x1 = x2; f1 = f2;
+            x2 = left + golden * (right - left);
+            f2 = evaluate(x2, nullptr);
+        }
+    }
+    if (f1 < bestCost) { bestCost = f1; bestGain = x1; }
+    if (f2 < bestCost) { bestCost = f2; bestGain = x2; }
+    evaluate(bestGain, &bestResidualGains);
+
+    const size_t radius = static_cast<size_t>(max(
+        0.0, round(smoothingMs * 0.0005 * repeated.sampleRate)));
+    if (radius > 0 && bestResidualGains.size() > 1)
+    {
+        vector<float> smoothed(bestResidualGains.size(), 1.0f);
+        for (size_t i = 0; i < bestResidualGains.size(); ++i)
+        {
+            const size_t first = i > radius ? i - radius : 0;
+            const size_t last = min(bestResidualGains.size() - 1, i + radius);
+            float value = 1.0f;
+            for (size_t j = first; j <= last; ++j)
+                value = min(value, bestResidualGains[j]);
+            smoothed[i] = value;
+        }
+        bestResidualGains.swap(smoothed);
+    }
+
+    for (size_t f = 0; f < groupFrames.size(); ++f)
+    {
+        const size_t frame = groupFrames[f];
+        for (size_t ch = 0; ch < channels; ++ch)
+        {
+            const size_t index = frame * channels + ch;
+            repeated.samples[index] *= static_cast<float>(bestGain);
+            residual.samples[index] *= bestResidualGains[f];
+        }
+    }
+    return bestGain;
+}
+
 int main()
 {
     // Выбор профиля шума
@@ -695,7 +863,10 @@ int main()
     if (settings.declip)
     {
         wcout << L"on, ceiling " << settings.declipCeilingDb
-            << L" dBFS, residual fade " << settings.declipFadeMs
+            << L" dBFS, max overshoot " << settings.declipOvershootDb
+            << L" dB, repeated priority "
+            << settings.repeatedPreservationPriority
+            << L"%, residual fade " << settings.declipFadeMs
             << L" ms, multiband attack " << settings.declipAttackMs
             << L" ms, reference release " << settings.declipReferenceReleaseMs
             << L" ms at 1 kHz" << endl;
@@ -808,7 +979,11 @@ int main()
 
             if (settings.declip)
             {
-                titleStream << " | declip " << settings.declipCeilingDb << " dB, residual fade "
+                titleStream << " | declip " << settings.declipCeilingDb
+                    << " dB, overshoot " << settings.declipOvershootDb
+                    << " dB, repeated priority "
+                    << settings.repeatedPreservationPriority
+                    << "%, residual fade "
                     << settings.declipFadeMs << " ms, attack "
                     << settings.declipAttackMs << " ms, reference release "
                     << settings.declipReferenceReleaseMs << " ms @ 1 kHz";
@@ -986,8 +1161,10 @@ int main()
                     progress.note(info.str());
                 }
 
+                const double workingCeilingDb =
+                    settings.declipCeilingDb + settings.declipOvershootDb;
                 const double peakCeiling =
-                    pow(10.0, settings.declipCeilingDb / 20.0);
+                    pow(10.0, workingCeilingDb / 20.0);
 
                 bool mixExceedsCeiling = false;
                 for (float sample : audio.samples)
@@ -1028,7 +1205,7 @@ int main()
 
                     BandReductionPlan bands = planBandReduction(
                         bandTarget,
-                        settings.declipCeilingDb,
+                        workingCeilingDb,
                         settings.declipAttackMs,
                         settings.declipReferenceReleaseMs,
                         DECLIP_GRAPH_COLUMNS,
@@ -1038,7 +1215,7 @@ int main()
                             25,
                             L"Calculating multiband reduction"
                         ),
-                        fixedComponents
+                        nullptr
                     );
 
                     applyBandReduction(
@@ -1057,7 +1234,7 @@ int main()
                     // Local peak reduction also changes only the residual.
                     PeakReductionPlan residual = planPeakReduction(
                         bandTarget,
-                        settings.declipCeilingDb,
+                        workingCeilingDb,
                         settings.declipFadeMs,
                         DECLIP_GRAPH_COLUMNS,
                         makeStageProgress(
@@ -1065,7 +1242,7 @@ int main()
                             10,
                             L"Calculating peak reduction"
                         ),
-                        fixedComponents
+                        nullptr
                     );
 
                     applyPeakReduction(
@@ -1083,7 +1260,7 @@ int main()
                         saveBandReductionGraph(
                             bands,
                             residual,
-                            settings.declipCeilingDb,
+                            workingCeilingDb,
                             job.graphBands,
                             graphTitle,
                             graphError
@@ -1114,16 +1291,13 @@ int main()
                         progress.note(info.str());
                     }
 
-                    // After residual-only peak reduction, attenuate a repeated group only
-                    // if the combined signal still exceeds the configured ceiling.
-                    // The same central gain is used for every occurrence and channel.
+                    // Jointly optimize the shared repeated-group gain
+                    // and local residual gain under the working peak ceiling.
                     if (hasRepeatedGroups)
                     {
-                        const double ceiling = pow(
-                            10.0, settings.declipCeilingDb / 20.0);
-
-                        vector<double> groupGains(
-                            repetitions.groupDetails.size(), 1.0);
+                        const double ceiling = pow(10.0, workingCeilingDb / 20.0);
+                        repeatedGroupReductionDb.assign(
+                            repetitions.groupDetails.size(), 0.0);
 
                         for (size_t groupIndex = 0;
                             groupIndex < repetitions.groupDetails.size();
@@ -1131,258 +1305,21 @@ int main()
                         {
                             const RepetitionGroup& group =
                                 repetitions.groupDetails[groupIndex];
+                            const double groupGain = optimizeRepeatedGroup(
+                                repeatedProcessed, residualAudio, group,
+                                ceiling, settings.repeatedPreservationPriority,
+                                settings.declipFadeMs);
 
-                            double groupGain = 1.0;
-                            double limitingAllowed = 1.0;
-                            double limitingRepeated = 0.0;
-                            double limitingResidual = 0.0;
-                            double limitingMixed = 0.0;
-                            size_t limitingFrame = 0;
-                            size_t limitingChannel = 0;
-                            size_t limitingOccurrence = 0;
-                            size_t constraintCount = 0;
-
-                            for (size_t occurrenceIndex = 0;
-                                occurrenceIndex < group.occurrences.size();
-                                ++occurrenceIndex)
-                            {
-                                const RepetitionOccurrence& occurrence =
-                                    group.occurrences[occurrenceIndex];
-
-                                if (occurrence.start >= audio.frameCount)
-                                    continue;
-
-                                const size_t endFrame = min(
-                                    static_cast<size_t>(audio.frameCount),
-                                    occurrence.start + group.length);
-
-                                for (size_t frame = occurrence.start;
-                                    frame < endFrame; ++frame)
-                                {
-                                    for (size_t channel = 0;
-                                        channel < audio.channels; ++channel)
-                                    {
-                                        const size_t sampleIndex =
-                                            frame * audio.channels + channel;
-
-                                        const double repeatedValue =
-                                            repeatedProcessed.samples[sampleIndex];
-                                        const double residualValue =
-                                            residualAudio.samples[sampleIndex];
-                                        const double mixed =
-                                            repeatedValue + residualValue;
-
-                                        double allowed = 1.0;
-
-                                        if (mixed > ceiling &&
-                                            repeatedValue > 1e-12)
-                                        {
-                                            allowed =
-                                                (ceiling - residualValue) /
-                                                repeatedValue;
-                                        }
-                                        else if (mixed < -ceiling &&
-                                            repeatedValue < -1e-12)
-                                        {
-                                            allowed =
-                                                (-ceiling - residualValue) /
-                                                repeatedValue;
-                                        }
-                                        else
-                                        {
-                                            continue;
-                                        }
-
-                                        if (allowed < 0.0)
-                                            continue;
-
-                                        ++constraintCount;
-
-                                        if (allowed < groupGain)
-                                        {
-                                            groupGain = allowed;
-                                            limitingAllowed = allowed;
-                                            limitingRepeated = repeatedValue;
-                                            limitingResidual = residualValue;
-                                            limitingMixed = mixed;
-                                            limitingFrame = frame;
-                                            limitingChannel = channel;
-                                            limitingOccurrence = occurrenceIndex;
-                                        }
-                                    }
-                                }
-                            }
-
-                            groupGains[groupIndex] =
-                                clamp(groupGain, 0.0, 1.0);
-
-                            // Report the exact sample responsible for unusually
-                            // strong attenuation instead of hiding it behind
-                            // the final group-level dB value.
-                            if (groupGain < 0.7079457843841379)
-                            {
-                                wstring groupName;
-                                size_t labelIndex = groupIndex;
-
-                                do
-                                {
-                                    groupName.insert(
-                                        groupName.begin(),
-                                        static_cast<wchar_t>(L'A' + labelIndex % 26));
-
-                                    if (labelIndex < 26)
-                                        break;
-
-                                    labelIndex = labelIndex / 26 - 1;
-                                } while (true);
-
-                                auto toDbfs = [](double value)
-                                    {
-                                        const double magnitude = abs(value);
-                                        return magnitude > 1e-12
-                                            ? 20.0 * log10(magnitude)
-                                            : -240.0;
-                                    };
-
-                                wostringstream diagnostic;
-                                diagnostic << fixed << setprecision(3)
-                                    << L"Repeated-group limiter: Group "
-                                    << groupName
-                                    << L" | gain "
-                                    << 20.0 * log10(max(groupGain, 1e-12))
-                                    << L" dB | constraints " << constraintCount
-                                    << L" | limiting occurrence "
-                                    << (limitingOccurrence + 1)
-                                    << L"/" << group.occurrences.size()
-                                    << L" | time "
-                                    << static_cast<double>(limitingFrame) /
-                                        audio.sampleRate
-                                    << L" s | channel " << (limitingChannel + 1)
-                                    << L" | repeated " << limitingRepeated
-                                    << L" (" << toDbfs(limitingRepeated) << L" dBFS)"
-                                    << L" | residual " << limitingResidual
-                                    << L" (" << toDbfs(limitingResidual) << L" dBFS)"
-                                    << L" | mix " << limitingMixed
-                                    << L" (" << toDbfs(limitingMixed) << L" dBFS)"
-                                    << L" | allowed gain " << limitingAllowed;
-
-                                progress.note(diagnostic.str());
-                            }
-                        }
-                        // Store the actual uniform attenuation for diagnostics.
-                        for (size_t groupIndex = 0;
-                            groupIndex < groupGains.size(); ++groupIndex)
-                        {
-                            if (groupGains[groupIndex] > 0.0)
-                            {
-                                repeatedGroupReductionDb[groupIndex] =
-                                    20.0 * log10(groupGains[groupIndex]);
-                            }
-                            else
-                            {
-                                repeatedGroupReductionDb[groupIndex] = -120.0;
-                            }
+                            repeatedGroupReductionDb[groupIndex] =
+                                20.0 * log10(max(groupGain, 1e-12));
                         }
 
-                        // Apply each group's gain uniformly to all of its
-                        // occurrences. The detector rejects overlapping groups;
-                        // this pass also avoids multiplying gains during analysis.
-                        for (size_t groupIndex = 0;
-                            groupIndex < repetitions.groupDetails.size();
-                            ++groupIndex)
-                        {
-                            const double groupGain = groupGains[groupIndex];
-
-                            if (groupGain >= 0.999999)
-                                continue;
-
-                            const RepetitionGroup& group =
-                                repetitions.groupDetails[groupIndex];
-
-                            for (const RepetitionOccurrence& occurrence : group.occurrences)
-                            {
-                                if (occurrence.start >= audio.frameCount)
-                                    continue;
-
-                                const size_t endFrame = min(
-                                    static_cast<size_t>(audio.frameCount),
-                                    occurrence.start + group.length);
-
-                                const size_t occurrenceLength =
-                                    endFrame - occurrence.start;
-
-                                const size_t requestedFadeFrames =
-                                    max<size_t>(
-                                        1,
-                                        static_cast<size_t>(round(
-                                            audio.sampleRate * 0.005
-                                        ))
-                                    );
-
-                                // Limit each edge fade to half the occurrence,
-                                // so short sounds still have a central region.
-                                const size_t fadeFrames = min(
-                                    requestedFadeFrames,
-                                    max<size_t>(1, occurrenceLength / 2)
-                                );
-
-                                for (size_t frame = occurrence.start;
-                                    frame < endFrame; ++frame)
-                                {
-                                    const size_t framesFromStart =
-                                        frame - occurrence.start + 1;
-
-                                    const size_t framesToEnd =
-                                        endFrame - frame;
-
-                                    const double fadeInPosition = min(
-                                        1.0,
-                                        static_cast<double>(framesFromStart) /
-                                            fadeFrames
-                                    );
-
-                                    const double fadeOutPosition = min(
-                                        1.0,
-                                        static_cast<double>(framesToEnd) /
-                                            fadeFrames
-                                    );
-
-                                    const double fadeIn =
-                                        0.5 - 0.5 * cos(3.14159265358979323846 *
-                                            fadeInPosition);
-
-                                    const double fadeOut =
-                                        0.5 - 0.5 * cos(3.14159265358979323846 *
-                                            fadeOutPosition);
-
-                                    const double envelope =
-                                        min(fadeIn, fadeOut);
-
-                                    const double localGain =
-                                        1.0 + (groupGain - 1.0) * envelope;
-
-                                    for (size_t channel = 0;
-                                        channel < audio.channels; ++channel)
-                                    {
-                                        repeatedProcessed.samples[
-                                            frame * audio.channels + channel] *=
-                                            static_cast<float>(localGain);
-                                    }
-                                }
-                            }
-                        }
-
-                        // Refresh the full mix after residual and repeated-component processing.
                         for (size_t i = 0; i < audio.samples.size(); ++i)
-                        {
                             audio.samples[i] =
                                 repeatedProcessed.samples[i] +
                                 residualAudio.samples[i];
-                        }
                     }
 
-
-                }
 
                 if (repetitionReady && !repetitions.groupDetails.empty())
                 {
