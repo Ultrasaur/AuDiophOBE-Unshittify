@@ -1198,7 +1198,8 @@ int main()
                     ),
                     repetitionReady ? &repeatedComponents : nullptr,
                     repetitionReady ? &residualAudio : nullptr,
-                    repetitionReady ? &repetitions : nullptr
+                    repetitionReady ? &repetitions : nullptr,
+                    &originalAudio
                 );
 
                 {
@@ -1236,6 +1237,19 @@ int main()
                         << declip.legacyCandidateLen3To4 << L"/"
                         << declip.legacyCandidateLen5To8 << L"/"
                         << declip.legacyCandidateLen9Plus
+                        << L" | candidate overlap none/partial/full "
+                        << declip.legacyCandidateNoOverlapRuns << L"/"
+                        << declip.legacyCandidatePartialOverlapRuns << L"/"
+                        << declip.legacyCandidateFullOverlapRuns
+                        << L" | overlap samples " << declip.legacyCandidateOverlapSamples
+                        << L" | restored/rejected/skipped overlap runs "
+                        << declip.legacyRestoredOverlapRuns << L"/"
+                        << declip.legacyRejectedOverlapRuns << L"/"
+                        << declip.legacySkippedOverlapRuns
+                        << L" | overlap samples by outcome "
+                        << declip.legacyRestoredOverlapSamples << L"/"
+                        << declip.legacyRejectedOverlapSamples << L"/"
+                        << declip.legacySkippedOverlapSamples
                         << L" | short peak <.90/.90-.98/.98-.999/>=.999 "
                         << declip.legacyShortPeakBelow90 << L"/"
                         << declip.legacyShortPeak90To98 << L"/"
