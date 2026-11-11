@@ -1349,6 +1349,28 @@ int main()
                         )
                     );
 
+                    // Report the two preliminary residual-reduction stages separately.
+                    // These statistics are distinct from the later joint repeated/residual
+                    // optimizer and must not be interpreted as its additional reduction.
+                    double maximumBandReductionDb = 0.0;
+
+                    for (double reductionDb : bands.maxReductionDb)
+                    {
+                        maximumBandReductionDb = min(
+                            maximumBandReductionDb, reductionDb);
+                    }
+
+                    wostringstream preliminaryReductionInfo;
+                    preliminaryReductionInfo << fixed << setprecision(2)
+                        << (hasRepeatedGroups
+                            ? L"Residual preliminary reduction: "
+                            : L"Signal preliminary reduction: ")
+                        << L"multiband " << bands.affectedFrames
+                        << L" frames (max " << maximumBandReductionDb << L" dB)"
+                        << L" | local peak " << residual.affectedFrames
+                        << L" frames (max " << residual.maxReductionDb << L" dB)";
+                    progress.note(preliminaryReductionInfo.str());
+
                     // If no multiband event was recorded, use a short neutral
                     // excerpt around the strongest sample so the diagnostic graph
                     // can still be generated with zero band correction.
