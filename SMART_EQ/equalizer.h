@@ -23,7 +23,9 @@ struct EqualizerSettings
     double hardLimitDb = 12.0;   // жёсткая граница: коррекция не превышает её
 
     bool declip = false;            // восстановление срезанных пиков
-    double declipCeilingDb = -1.0;  // предел пика после восстановления, dBFS
+    double declipCeilingDb = -1.0;  // целевой конечный предел пика, dBFS
+    double declipOvershootDb = 6.0;  // допустимое превышение при локальной обработке, dB
+    double repeatedPreservationPriority = 50.0; // 0 = residual, 100 = repeated
     double declipFadeMs = 40.0;     // длительность плавного спада общей коррекции, мс
     double declipAttackMs = 5.0;    // Attack многополосного снижения, мс
     double declipReferenceReleaseMs = 100.0; // Release на опорной частоте 1000 Гц, мс
