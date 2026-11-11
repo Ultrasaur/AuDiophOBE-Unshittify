@@ -572,11 +572,22 @@ struct ProgressReporter
 
 
 // Jointly optimize one repeated group and its residual.
+struct RepeatedGroupOptimizationStats
+{
+    double repeatedGainDb = 0.0;
+    double maximumResidualReductionDb = 0.0;
+    size_t residualReducedFrames = 0;
+    size_t smoothingAdjustedFrames = 0;
+};
+
 static double optimizeRepeatedGroup(
     AudioData& repeated, AudioData& residual,
     const RepetitionGroup& group, double ceiling,
-    double repeatedPriorityPercent, double smoothingMs)
+    double repeatedPriorityPercent, double smoothingMs,
+    RepeatedGroupOptimizationStats& stats)
 {
+    stats = RepeatedGroupOptimizationStats{};
+
     if (repeated.channels != residual.channels ||
         repeated.frameCount != residual.frameCount ||
         repeated.samples.size() != residual.samples.size() ||
@@ -585,6 +596,7 @@ static double optimizeRepeatedGroup(
     const size_t channels = repeated.channels;
     const size_t frames = static_cast<size_t>(repeated.frameCount);
     vector<size_t> groupFrames;
+
     for (const RepetitionOccurrence& occurrence : group.occurrences)
     {
         if (occurrence.start >= frames) continue;
@@ -592,7 +604,9 @@ static double optimizeRepeatedGroup(
         for (size_t frame = occurrence.start; frame < end; ++frame)
             groupFrames.push_back(frame);
     }
+
     if (groupFrames.empty()) return 1.0;
+
     sort(groupFrames.begin(), groupFrames.end());
     groupFrames.erase(unique(groupFrames.begin(), groupFrames.end()),
         groupFrames.end());
@@ -600,60 +614,136 @@ static double optimizeRepeatedGroup(
     const double wr = clamp(repeatedPriorityPercent / 100.0, 0.0, 1.0);
     const double ws = 1.0 - wr;
     const double minimumGain = 1e-4;
+    const size_t radius = static_cast<size_t>(max(
+        0.0, round(smoothingMs * 0.0005 * repeated.sampleRate)));
+
     vector<float> bestResidualGains(groupFrames.size(), 1.0f);
     double bestGain = 1.0;
     double bestCost = numeric_limits<double>::infinity();
 
-    auto evaluate = [&](double gr, vector<float>* saved)
+    // The objective is evaluated after smoothing. Each smoothed residual gain
+    // is projected into its frame's feasible interval, preserving the ceiling.
+    auto evaluate = [&](double gr, vector<float>* saved,
+        RepeatedGroupOptimizationStats* savedStats)
     {
-        double residualLoss = 0.0;
-        vector<float> gains(groupFrames.size(), 1.0f);
+        vector<double> lowerBounds(groupFrames.size(), 0.0);
+        vector<double> upperBounds(groupFrames.size(), 1.0);
+        vector<float> rawGains(groupFrames.size(), 1.0f);
+
         for (size_t f = 0; f < groupFrames.size(); ++f)
         {
             const size_t frame = groupFrames[f];
-            double lower = 0.0, upper = 1.0;
+            double lower = 0.0;
+            double upper = 1.0;
+
             for (size_t ch = 0; ch < channels; ++ch)
             {
                 const size_t index = frame * channels + ch;
                 const double a = repeated.samples[index] * gr;
                 const double b = residual.samples[index];
+
                 if (abs(b) < 1e-15)
                 {
-                    if (abs(a) > ceiling) return numeric_limits<double>::infinity();
+                    if (abs(a) > ceiling)
+                        return numeric_limits<double>::infinity();
                     continue;
                 }
+
                 const double x1 = (-ceiling - a) / b;
                 const double x2 = ( ceiling - a) / b;
                 lower = max(lower, min(x1, x2));
                 upper = min(upper, max(x1, x2));
             }
+
             lower = max(lower, 0.0);
             upper = min(upper, 1.0);
+
             if (lower > upper + 1e-12)
                 return numeric_limits<double>::infinity();
-            const float gs = static_cast<float>(clamp(upper, 0.0, 1.0));
-            gains[f] = gs;
-            if (gs < 1.0f)
+
+            lowerBounds[f] = lower;
+            upperBounds[f] = upper;
+            rawGains[f] = static_cast<float>(upper);
+        }
+
+        vector<float> gains = rawGains;
+
+        if (radius > 0 && gains.size() > 1)
+        {
+            vector<float> smoothed(gains.size(), 1.0f);
+
+            for (size_t i = 0; i < gains.size(); ++i)
             {
+                size_t first = i;
+                while (first > 0 &&
+                    groupFrames[i] - groupFrames[first - 1] <= radius)
+                    --first;
+
+                size_t last = i;
+                while (last + 1 < groupFrames.size() &&
+                    groupFrames[last + 1] - groupFrames[i] <= radius)
+                    ++last;
+
+                float value = 1.0f;
+                for (size_t j = first; j <= last; ++j)
+                    value = min(value, rawGains[j]);
+
+                // Do not let smoothing violate either side of the feasible range.
+                smoothed[i] = static_cast<float>(clamp(
+                    static_cast<double>(value),
+                    lowerBounds[i], upperBounds[i]));
+            }
+
+            gains.swap(smoothed);
+        }
+
+        double residualLoss = 0.0;
+        RepeatedGroupOptimizationStats localStats;
+
+        for (size_t f = 0; f < gains.size(); ++f)
+        {
+            if (abs(static_cast<double>(gains[f]) -
+                static_cast<double>(rawGains[f])) > 1e-6)
+            {
+                ++localStats.smoothingAdjustedFrames;
+            }
+
+            if (gains[f] < 1.0f)
+            {
+                ++localStats.residualReducedFrames;
                 const double db = 20.0 * log10(max(
-                    static_cast<double>(gs), minimumGain));
+                    static_cast<double>(gains[f]), minimumGain));
                 residualLoss += db * db;
+                localStats.maximumResidualReductionDb = min(
+                    localStats.maximumResidualReductionDb, db);
             }
         }
+
         const double grDb = 20.0 * log10(max(gr, minimumGain));
         const double meanResidualLoss =
             residualLoss / static_cast<double>(groupFrames.size());
         const double cost = wr * grDb * grDb + ws * meanResidualLoss;
-        if (saved) *saved = move(gains);
+
+        if (saved)
+            *saved = move(gains);
+
+        if (savedStats)
+        {
+            localStats.repeatedGainDb = grDb;
+            *savedStats = localStats;
+        }
+
         return cost;
     };
 
     constexpr size_t GRID = 32;
     size_t bestIndex = GRID;
+
     for (size_t i = 0; i <= GRID; ++i)
     {
         const double gr = minimumGain + (1.0 - minimumGain) * i / GRID;
-        const double cost = evaluate(gr, nullptr);
+        const double cost = evaluate(gr, nullptr, nullptr);
+
         if (cost < bestCost - 1e-12 ||
             (abs(cost - bestCost) <= 1e-12 && gr > bestGain))
         {
@@ -662,63 +752,49 @@ static double optimizeRepeatedGroup(
             bestIndex = i;
         }
     }
+
     if (!isfinite(bestCost)) return 1.0;
 
     double left = minimumGain + (1.0 - minimumGain) *
         (bestIndex == 0 ? 0 : bestIndex - 1) / GRID;
     double right = minimumGain + (1.0 - minimumGain) *
         (bestIndex == GRID ? GRID : bestIndex + 1) / GRID;
+
     const double golden = 0.6180339887498948482;
     double x1 = right - golden * (right - left);
     double x2 = left + golden * (right - left);
-    double f1 = evaluate(x1, nullptr), f2 = evaluate(x2, nullptr);
+    double f1 = evaluate(x1, nullptr, nullptr);
+    double f2 = evaluate(x2, nullptr, nullptr);
+
     for (int i = 0; i < 24; ++i)
     {
         if (f1 <= f2)
         {
-            right = x2; x2 = x1; f2 = f1;
+            right = x2;
+            x2 = x1;
+            f2 = f1;
             x1 = right - golden * (right - left);
-            f1 = evaluate(x1, nullptr);
+            f1 = evaluate(x1, nullptr, nullptr);
         }
         else
         {
-            left = x1; x1 = x2; f1 = f2;
+            left = x1;
+            x1 = x2;
+            f1 = f2;
             x2 = left + golden * (right - left);
-            f2 = evaluate(x2, nullptr);
+            f2 = evaluate(x2, nullptr, nullptr);
         }
     }
+
     if (f1 < bestCost) { bestCost = f1; bestGain = x1; }
     if (f2 < bestCost) { bestCost = f2; bestGain = x2; }
-    evaluate(bestGain, &bestResidualGains);
 
-    const size_t radius = static_cast<size_t>(max(
-        0.0, round(smoothingMs * 0.0005 * repeated.sampleRate)));
-    if (radius > 0 && bestResidualGains.size() > 1)
-    {
-        vector<float> smoothed(bestResidualGains.size(), 1.0f);
-        for (size_t i = 0; i < bestResidualGains.size(); ++i)
-        {
-            size_t first = i;
-            while (first > 0 &&
-                groupFrames[i] - groupFrames[first - 1] <= radius)
-                --first;
-
-            size_t last = i;
-            while (last + 1 < groupFrames.size() &&
-                groupFrames[last + 1] - groupFrames[i] <= radius)
-                ++last;
-
-            float value = 1.0f;
-            for (size_t j = first; j <= last; ++j)
-                value = min(value, bestResidualGains[j]);
-            smoothed[i] = value;
-        }
-        bestResidualGains.swap(smoothed);
-    }
+    evaluate(bestGain, &bestResidualGains, &stats);
 
     for (size_t f = 0; f < groupFrames.size(); ++f)
     {
         const size_t frame = groupFrames[f];
+
         for (size_t ch = 0; ch < channels; ++ch)
         {
             const size_t index = frame * channels + ch;
@@ -726,6 +802,7 @@ static double optimizeRepeatedGroup(
             residual.samples[index] *= bestResidualGains[f];
         }
     }
+
     return bestGain;
 }
 
@@ -1365,28 +1442,75 @@ int main()
                         repeatedGroupReductionDb.assign(
                             repetitions.groupDetails.size(), 0.0);
 
+                        size_t repeatedAttenuatedGroups = 0;
+                        size_t residualOnlyGroups = 0;
+                        size_t unchangedGroups = 0;
+                        size_t smoothingAdjustedFrames = 0;
+                        double maximumRepeatedReductionDb = 0.0;
+                        double maximumResidualReductionDb = 0.0;
+
                         for (size_t groupIndex = 0;
                             groupIndex < repetitions.groupDetails.size();
                             ++groupIndex)
                         {
                             const RepetitionGroup& group =
                                 repetitions.groupDetails[groupIndex];
+                            RepeatedGroupOptimizationStats groupStats;
                             const double groupGain = optimizeRepeatedGroup(
                                 repeatedProcessed, residualAudio, group,
                                 ceiling, settings.repeatedPreservationPriority,
-                                settings.declipFadeMs);
+                                settings.declipFadeMs, groupStats);
 
                             repeatedGroupReductionDb[groupIndex] =
                                 20.0 * log10(max(groupGain, 1e-12));
+
+                            maximumRepeatedReductionDb = min(
+                                maximumRepeatedReductionDb,
+                                groupStats.repeatedGainDb);
+                            maximumResidualReductionDb = min(
+                                maximumResidualReductionDb,
+                                groupStats.maximumResidualReductionDb);
+                            smoothingAdjustedFrames +=
+                                groupStats.smoothingAdjustedFrames;
+
+                            const bool repeatedWasReduced =
+                                groupStats.repeatedGainDb < -0.001;
+                            const bool residualWasReduced =
+                                groupStats.residualReducedFrames > 0;
+
+                            if (repeatedWasReduced)
+                                ++repeatedAttenuatedGroups;
+                            else if (residualWasReduced)
+                                ++residualOnlyGroups;
+                            else
+                                ++unchangedGroups;
                         }
+
+                        wostringstream optimizationInfo;
+                        optimizationInfo << fixed << setprecision(2)
+                            << L"Repeated/residual optimization: "
+                            << repetitions.groupDetails.size() << L" groups | "
+                            << L"repeated attenuated: " << repeatedAttenuatedGroups
+                            << L" (max " << maximumRepeatedReductionDb << L" dB) | "
+                            << L"residual only: " << residualOnlyGroups
+                            << L" (max " << maximumResidualReductionDb << L" dB) | "
+                            << L"unchanged: " << unchangedGroups
+                            << L" | smoothing constrained: "
+                            << smoothingAdjustedFrames << L" frames";
+                        progress.note(optimizationInfo.str());
 
                         for (size_t i = 0; i < audio.samples.size(); ++i)
                             audio.samples[i] =
                                 repeatedProcessed.samples[i] +
                                 residualAudio.samples[i];
                     }
-
-
+                }
+                else if (hasRepeatedGroups)
+                {
+                    progress.note(
+                        L"Repeated/residual optimization skipped: "
+                        L"no declipping runs and no samples above working ceiling"
+                    );
                 }
 
                 if (repetitionReady && !repetitions.groupDetails.empty())
