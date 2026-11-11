@@ -3809,6 +3809,11 @@ bool saveRepeatedComponentsGraph(
     file << "<text x=\"" << spectrumLeft << "\" y=\"58\" "
         << "font-weight=\"bold\" fill=\"#222222\">Average spectrum of group occurrences</text>\n";
 
+    double maxGroupReductionDb = 1.0;
+    for (double reductionDb : groupReductionDb)
+        maxGroupReductionDb = max(maxGroupReductionDb, -reductionDb);
+    maxGroupReductionDb = ceil(maxGroupReductionDb);
+
     for (size_t groupIndex = 0;
         groupIndex < repetitions.groupDetails.size(); ++groupIndex)
     {
@@ -3896,20 +3901,20 @@ bool saveRepeatedComponentsGraph(
 
             file << "<line x1=\"" << x << "\" y1=\"" << plotTop
                 << "\" x2=\"" << x << "\" y2=\"" << plotBottom
-                << "\" stroke=\"#eeeeee\"/>\\n";
+                << "\" stroke=\"#eeeeee\"/>\n";
 
             file << "<text x=\"" << x << "\" y=\"" << plotBottom + 18.0
                 << "\" text-anchor=\"middle\" fill=\"#555555\">"
-                << formatTimeLabel(time, minutes, decimals) << "</text>\\n";
+                << formatTimeLabel(time, minutes, decimals) << "</text>\n";
         }
 
         file << "<rect x=\"" << timeLeft << "\" y=\"" << plotTop
             << "\" width=\"" << timeWidth << "\" height=\"" << plotHeight
-            << "\" fill=\"none\" stroke=\"#888888\"/>\\n";
+            << "\" fill=\"none\" stroke=\"#888888\"/>\n";
 
         // Высота заполнения показывает глубину снижения; сами сегменты
         // расположены строго на временных интервалах обнаруженных вхождений.
-        const double reductionDepth = max(1.0, ceil(-reductionDb));
+        const double reductionDepth = maxGroupReductionDb;
         const double attenuationHeight = plotHeight *
             clamp(-reductionDb / reductionDepth, 0.0, 1.0);
 
@@ -3937,7 +3942,7 @@ bool saveRepeatedComponentsGraph(
                 file << "<rect x=\"" << x1 << "\" y=\"" << plotTop
                     << "\" width=\"" << max(1.0, x2 - x1)
                     << "\" height=\"" << attenuationHeight
-                    << "\" fill=\"#e07b00\" fill-opacity=\"0.70\"/>\\n";
+                    << "\" fill=\"#e07b00\" fill-opacity=\"0.70\"/>\n";
             }
         }
 
@@ -3946,7 +3951,7 @@ bool saveRepeatedComponentsGraph(
             << "\" text-anchor=\"middle\" fill=\"#444444\">"
             << (minutes ? "Track time, min:s" : "Track time, s")
             << " | reduction scale: 0 to -" << reductionDepth << " dB"
-            << "</text>\\n";
+            << "</text>\n";
 
         // Спектр строится по конкатенированным фрагментам всех вхождений.
         Spectrum groupSpectrum;
