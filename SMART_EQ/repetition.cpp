@@ -584,6 +584,45 @@ namespace
             }
         }
 
+        // Этап 2b. Дополнительный поиск с допуском одного
+        // отличающегося бита в частичной сигнатуре.
+        // Ограничиваем размер проверяемой группы, чтобы не создавать
+        // чрезмерное количество пар из слишком частых сигнатур.
+        for (const FrameData& data : frameData)
+        {
+            for (size_t part = 0; part < 4; ++part)
+            {
+                const uint16_t signature = data.signatures[part];
+
+                for (unsigned int bit = 0; bit < 16; ++bit)
+                {
+                    const uint16_t neighborSignature =
+                        static_cast<uint16_t>(signature ^ (1u << bit));
+
+                    auto bucketIt = buckets.find(neighborSignature);
+
+                    if (bucketIt == buckets.end())
+                        continue;
+
+                    const std::vector<size_t>& positions = bucketIt->second;
+
+                    if (positions.size() > maxBucketSize)
+                        continue;
+
+                    for (size_t other : positions)
+                    {
+                        if (other <= data.frame)
+                            continue;
+
+                        if (other - data.frame < windowFrames)
+                            continue;
+
+                        candidates.push_back({ data.frame, other });
+                    }
+                }
+            }
+        }
+
         // Этап 3. Обработка больших групп.
         // Вместо одной частичной сигнатуры используем
         // комбинации двух из четырёх сигнатур.
