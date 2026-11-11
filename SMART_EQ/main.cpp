@@ -1381,7 +1381,7 @@ int main()
 
                     for (size_t band = 0; band < BAND_COUNT; band++)
                     {
-                        const uint64_t affected =
+                        const std::uint64_t affected =
                             bands.affectedFramesByBand[band];
 
                         if (affected == 0)
@@ -1391,10 +1391,13 @@ int main()
                             bands.sumReductionDb[band] /
                             static_cast<double>(affected);
 
+                        const string bandLabel = getBandLabel(band);
+                        const wstring wideBandLabel(
+                            bandLabel.begin(),
+                            bandLabel.end());
+
                         bandReductionDetails
-                            << L"\n" << wstring(
-                                getBandLabel(band).begin(),
-                                getBandLabel(band).end())
+                            << L"\n" << wideBandLabel
                             << L" | " << affected
                             << L" | " << bands.framesReducedAtLeast3Db[band]
                             << L" | " << bands.framesReducedAtLeast6Db[band]
