@@ -1328,6 +1328,8 @@ int main()
                     }
 
 
+                }
+
                 if (repetitionReady && !repetitions.groupDetails.empty())
                 {
                     saveRepeatedComponentsGraph(
@@ -1411,8 +1413,11 @@ int main()
                 return false;
             }
 
+            const double finalPeakCeilingDb =
+                settings.declip ? settings.declipCeilingDb : -1.0;
+
             const double finalGainReductionDb =
-                limitPeaks(outputAudio, -1.0);
+                limitPeaks(outputAudio, finalPeakCeilingDb);
 
             if (finalGainReductionDb < -0.001)
             {
