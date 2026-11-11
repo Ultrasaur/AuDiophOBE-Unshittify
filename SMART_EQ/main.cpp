@@ -358,8 +358,8 @@ bool selectDeclip(EqualizerSettings& settings)
     }
 
     if (!readNumber(
-        L"  Maximum declipping overshoot, dB (Enter = 6): ",
-        6.0, 0.0, 10.0,
+        L"  Maximum declipping overshoot, dB (Enter = 2): ",
+        2.0, 0.0, 10.0,
         settings.declipOvershootDb))
     {
         return false;
@@ -526,15 +526,9 @@ struct ProgressReporter
         previousLength = 0;
     }
 
-    // Информационное сообщение на отдельной строке
-    void note(const wstring& text)
+    // Диагностические сообщения отключены; обработка и прогресс не затрагиваются.
+    void note(const wstring&)
     {
-        lock_guard<mutex> guard(lock);
-
-        wcout << L"\r" << wstring(previousLength, L' ') << L"\r";
-        wcout << text << endl;
-
-        previousLength = 0;
     }
 
     // Файл обработан успешно
