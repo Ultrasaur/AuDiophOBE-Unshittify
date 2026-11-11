@@ -118,6 +118,9 @@ struct DeclipResult
     std::uint64_t legacyDetectedRuns = 0;
     std::uint64_t legacyRestoredRuns = 0;
     std::uint64_t legacyOvershootRejectedRuns = 0;
+    std::uint64_t legacyTooLongRuns = 0;
+    std::uint64_t legacyEdgeRuns = 0;
+    std::uint64_t legacyShortRuns = 0;
     std::uint64_t legacySkippedRuns = 0;
     std::vector<DeclipSegment> segments;
 };
