@@ -8,6 +8,7 @@
 #include <limits>
 #include <sstream>
 #include <deque>
+#include <numeric>
 
 using namespace std;
 
@@ -2007,6 +2008,78 @@ DeclipResult declipAudio(
         audio.samples.size() != audio.frameCount * audio.channels)
     {
         return result;
+    }
+
+    // Диагностика размытого потолка выполняется по исходному сигналу
+    // и не меняет аудиоданные или существующий алгоритм восстановления.
+    const AudioData& ceilingAnalysisAudio =
+        originalAudio != nullptr &&
+        originalAudio->channels == audio.channels &&
+        originalAudio->sampleRate == audio.sampleRate &&
+        originalAudio->frameCount == audio.frameCount &&
+        originalAudio->samples.size() == originalAudio->frameCount * originalAudio->channels
+        ? *originalAudio
+        : audio;
+
+    for (size_t channel = 0; channel < ceilingAnalysisAudio.channels; ++channel)
+    {
+        for (int polarity : { 1, -1 })
+        {
+            const SmearedFit fit = fitSmearedCeiling(
+                ceilingAnalysisAudio.samples,
+                ceilingAnalysisAudio.channels,
+                channel,
+                polarity,
+                ceilingAnalysisAudio.sampleRate);
+
+            if (!fit.valid)
+                continue;
+
+            const double duration =
+                static_cast<double>(ceilingAnalysisAudio.frameCount) /
+                ceilingAnalysisAudio.sampleRate;
+
+            const uint64_t touchEvents = countTouchEvents(
+                ceilingAnalysisAudio.samples,
+                ceilingAnalysisAudio.channels,
+                channel,
+                polarity,
+                fit.theta - 2.0 * fit.sigma);
+
+            double actualPeak = 0.0;
+
+            for (size_t i = channel;
+                i < ceilingAnalysisAudio.samples.size();
+                i += ceilingAnalysisAudio.channels)
+            {
+                actualPeak = max(
+                    actualPeak,
+                    polarity * static_cast<double>(
+                        ceilingAnalysisAudio.samples[i]));
+            }
+
+            const double sigmaRatio = fit.sigma / fit.theta;
+            const uint64_t requiredEvents = static_cast<uint64_t>(
+                max(20.0, 8.0 * duration));
+
+            SmearedCeilingDiagnostic diagnostic;
+            diagnostic.channel = channel;
+            diagnostic.polarity = polarity;
+            diagnostic.fitted = true;
+            diagnostic.peak = fit.peak;
+            diagnostic.theta = fit.theta;
+            diagnostic.sigma = fit.sigma;
+            diagnostic.knee = fit.theta - 6.0 * fit.sigma;
+            diagnostic.bumpRatio = fit.bumpRatio;
+            diagnostic.touchEvents = touchEvents;
+            diagnostic.smearedEvidence =
+                sigmaRatio >= 1e-3 &&
+                sigmaRatio < 0.07 &&
+                actualPeak > fit.theta + 1.5 * fit.sigma &&
+                touchEvents >= requiredEvents;
+
+            result.smearedCeilings.push_back(diagnostic);
+        }
     }
 
     // Восстановленный пик не может превышать уровень среза более чем в 2 раза (+6 дБ)
