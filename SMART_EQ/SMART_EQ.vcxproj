@@ -148,6 +148,7 @@
     <ClCompile Include="fft.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="profiles.cpp" />
+    <ClCompile Include="repetition.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="audio.h" />
