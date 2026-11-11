@@ -2708,12 +2708,6 @@ BandReductionPlan planBandReduction(
         }
     }
 
-    const bool hasFixedComponents = fixedComponents != nullptr &&
-        fixedComponents->channels == audio.channels &&
-        fixedComponents->sampleRate == audio.sampleRate &&
-        fixedComponents->frameCount == audio.frameCount &&
-        fixedComponents->samples.size() == audio.samples.size();
-
     auto peakAt = [&](size_t frame)
         {
             float peak = 0.0f;
