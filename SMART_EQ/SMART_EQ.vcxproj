@@ -144,6 +144,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="audio.cpp" />
+    <ClCompile Include="better_declipper.cpp" />
     <ClCompile Include="equalizer.cpp" />
     <ClCompile Include="fft.cpp" />
     <ClCompile Include="main.cpp" />
@@ -152,6 +153,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="audio.h" />
+    <ClInclude Include="better_declipper.h" />
     <ClInclude Include="dr_flac.h" />
     <ClInclude Include="dr_mp3.h" />
     <ClInclude Include="dr_wav.h" />
