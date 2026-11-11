@@ -9,6 +9,7 @@
 #include <vector>
 #include <map>
 #include <iterator>
+#include <array>
 
 namespace
 {
@@ -345,18 +346,31 @@ namespace
     }
 
     // Ищет пары потенциально совпадающих фрагментов.
+
     std::vector<CandidatePair> findCandidates(
         const AudioData& audio,
         size_t windowFrames,
         size_t hopFrames)
     {
+        constexpr size_t maxBucketSize = 256;
+
+        // Сохраняем сигнатуры всех фрагментов,
+        // прошедших проверку энергии.
+        struct FrameData
+        {
+            size_t frame;
+            std::array<uint16_t, 4> signatures;
+        };
+
+        std::vector<FrameData> frameData;
+
         std::unordered_map<uint16_t, std::vector<size_t>> buckets;
 
+        // Этап 1. Формирование частичных сигнатур.
         for (size_t frame = 0;
             frame + windowFrames <= audio.frameCount;
             frame += hopFrames)
         {
-            // Фрагменты с практически нулевой энергией неинтересны.
             double energy = 0.0;
 
             const size_t sampleCount =
@@ -372,10 +386,8 @@ namespace
                     ch < audio.channels;
                     ++ch)
                 {
-                    double value =
-                        audio.samples[
-                            (frame + offset) * audio.channels + ch
-                        ];
+                    double value = audio.samples[
+                        (frame + offset) * audio.channels + ch];
 
                     energy += value * value;
                 }
@@ -384,9 +396,12 @@ namespace
             if (energy < 1e-10)
                 continue;
 
+            FrameData data = {};
+            data.frame = frame;
+
             for (size_t part = 0; part < 4; ++part)
             {
-                uint16_t signature =
+                data.signatures[part] =
                     makePartialSignature(
                         audio,
                         frame,
@@ -394,22 +409,29 @@ namespace
                         part
                     );
 
-                buckets[signature].push_back(frame);
+                buckets[data.signatures[part]].push_back(frame);
             }
+
+            frameData.push_back(data);
         }
 
         std::vector<CandidatePair> candidates;
 
-        // Не допускаем взрывного роста количества сравнений
-        // для слишком распространённых сигнатур.
-        const size_t maxBucketSize = 256;
+        // Этап 2. Обычный поиск в небольших группах.
+        // Здесь сохраняется прежняя логика.
+        std::unordered_set<size_t> largeBucketPositions;
 
         for (const auto& entry : buckets)
         {
             const std::vector<size_t>& positions = entry.second;
 
             if (positions.size() > maxBucketSize)
+            {
+                for (size_t position : positions)
+                    largeBucketPositions.insert(position);
+
                 continue;
+            }
 
             for (size_t i = 0; i < positions.size(); ++i)
             {
@@ -426,6 +448,85 @@ namespace
             }
         }
 
+        // Этап 3. Обработка больших групп.
+        // Вместо одной частичной сигнатуры используем
+        // комбинации двух из четырёх сигнатур.
+
+        if (!largeBucketPositions.empty())
+        {
+            const size_t partPairs[6][2] =
+            {
+                { 0, 1 },
+                { 0, 2 },
+                { 0, 3 },
+                { 1, 2 },
+                { 1, 3 },
+                { 2, 3 }
+            };
+
+            for (size_t pairIndex = 0;
+                pairIndex < 6;
+                ++pairIndex)
+            {
+                size_t partA = partPairs[pairIndex][0];
+                size_t partB = partPairs[pairIndex][1];
+
+                std::unordered_map<
+                    uint32_t,
+                    std::vector<size_t>
+                > compositeBuckets;
+
+                // Строим составные сигнатуры для всех фрагментов.
+                // Это позволяет находить пары даже тогда,
+                // когда только один из фрагментов попал
+                // в большую группу исходных сигнатур.
+                for (const FrameData& data : frameData)
+                {
+                    uint32_t key =
+                        (static_cast<uint32_t>(
+                            data.signatures[partA]) << 16) |
+                        data.signatures[partB];
+
+                    compositeBuckets[key].push_back(data.frame);
+                }
+
+                // Ищем совпадения составных сигнатур.
+                for (const auto& entry : compositeBuckets)
+                {
+                    const std::vector<size_t>& positions =
+                        entry.second;
+
+                    if (positions.size() < 2)
+                        continue;
+
+                    for (size_t i = 0; i < positions.size(); ++i)
+                    {
+                        for (size_t j = i + 1;
+                            j < positions.size();
+                            ++j)
+                        {
+                            size_t first = positions[i];
+                            size_t second = positions[j];
+
+                            if (second - first < windowFrames)
+                                continue;
+
+                            // Хотя бы одна позиция должна
+                            // относиться к большой исходной группе.
+                            if (largeBucketPositions.count(first) == 0 &&
+                                largeBucketPositions.count(second) == 0)
+                            {
+                                continue;
+                            }
+
+                            candidates.push_back({ first, second });
+                        }
+                    }
+                }
+            }
+        }
+
+        // Этап 4. Удаляем дубликаты пар.
         std::sort(candidates.begin(), candidates.end());
 
         candidates.erase(
@@ -435,6 +536,7 @@ namespace
 
         return candidates;
     }
+
 }
 
 bool separateRepeatedComponents(
