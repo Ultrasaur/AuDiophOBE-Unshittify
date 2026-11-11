@@ -1223,9 +1223,13 @@ int main()
                         << L" | legacy detected/restored "
                         << declip.legacyDetectedRuns << L"/"
                         << declip.legacyRestoredRuns
-                        << L" | legacy overshoot rejected/skipped "
-                        << declip.legacyOvershootRejectedRuns << L"/"
-                        << declip.legacySkippedRuns;
+                        << L" | legacy restored/rejected "
+                        << declip.legacyRestoredRuns << L"/"
+                        << declip.legacyOvershootRejectedRuns
+                        << L" | too long/edge/short "
+                        << declip.legacyTooLongRuns << L"/"
+                        << declip.legacyEdgeRuns << L"/"
+                        << declip.legacyShortRuns;
                     progress.note(L"[Diagnostics] " +
                         job.input.filename().wstring() + L" | " + info.str());
                 }
@@ -1588,7 +1592,9 @@ int main()
                         }
                     }
 
-                    progress.note(bandReductionDetails.str());
+                    // Per-band detail is intentionally omitted from the
+                    // console log; the compact plan summary above contains
+                    // the aggregate information needed for format comparison.
 
                     // If no multiband event was recorded, use a short neutral
                     // excerpt around the strongest sample so the diagnostic graph
