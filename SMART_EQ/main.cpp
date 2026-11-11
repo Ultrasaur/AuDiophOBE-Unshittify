@@ -1656,32 +1656,9 @@ int main()
                         graphError
                     );
 
-                    if (bands.affectedFrames > 0 || !residual.regions.empty())
-                    {
-                        wostringstream info;
-
-                        info << fixed << setprecision(1)
-                            << L"Peaks lowered by band: " << job.relative.wstring()
-                            << L" |";
-
-                        for (size_t b = 0; b < BAND_COUNT; b++)
-                        {
-                            if (bands.maxReductionDb[b] < -0.05)
-                            {
-                                const string label = getBandLabel(b);
-
-                                info << L" " << wstring(label.begin(), label.end())
-                                    << L" Hz " << bands.maxReductionDb[b] << L" dB;";
-                            }
-                        }
-
-                        if (residual.maxReductionDb < -0.05)
-                        {
-                            info << L" common " << residual.maxReductionDb << L" dB";
-                        }
-
-                        progress.note(info.str());
-                    }
+                    // Aggregate band reductions are already reported in the
+                    // compact multiband plan summary above. Do not print all
+                    // 128 frequency-band values to the console.
 
                     // Jointly optimize the shared repeated-group gain
                     // and local residual gain under the working peak ceiling.
