@@ -3859,8 +3859,8 @@ bool saveBandReductionGraph(
         ostringstream caption;
 
         caption << fixed << setprecision(0)
-            << "Gain reduction by band, Hz (each lane: 0 to -"
-            << depthMax << " dB; residual only, repeated components excluded)";
+            << "Band gain reduction (Hz; residual only, repeats excluded; 0 to -"
+            << depthMax << " dB)";
 
         file << "<text x=\"" << MARGIN_LEFT << "\" y=\"" << lanesTop - 10.0
             << "\" fill=\"#222222\" font-weight=\"bold\">"
