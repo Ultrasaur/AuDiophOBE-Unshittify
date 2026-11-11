@@ -730,16 +730,16 @@ int main()
         job.relative = relativePath;
         job.output = outputDirectory / relativePath;
         job.graphCorrection = graphsDirectory / relativePath;
-        job.graphCorrection += L".correction.svg";
+        job.graphCorrection += L".03_correction.svg";
 
         job.graphSpectrum = graphsDirectory / relativePath;
-        job.graphSpectrum += L".spectrum.svg";
+        job.graphSpectrum += L".04_spectrum.svg";
 
         job.graphDeclip = graphsDirectory / relativePath;
-        job.graphDeclip += L".declip.svg";
+        job.graphDeclip += L".02_declip.svg";
 
         job.graphBands = graphsDirectory / relativePath;
-        job.graphBands += L".bands.svg";
+        job.graphBands += L".01_bands.svg";
 
         fs::create_directories(job.output.parent_path(), filesystemError);
 
