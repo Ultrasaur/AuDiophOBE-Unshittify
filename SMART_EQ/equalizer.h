@@ -211,6 +211,14 @@ struct BandReductionPlan
     std::vector<std::uint64_t> framesReducedAtLeast12Db;
     std::vector<std::uint64_t> framesAtReductionLimit;
     std::vector<double> sumReductionDb;
+
+    // Continuous attenuation episodes, measured in audio frames.
+    std::vector<std::uint64_t> episodesAtLeast6Db;
+    std::vector<std::uint64_t> totalEpisodeFramesAtLeast6Db;
+    std::vector<std::uint64_t> maxEpisodeFramesAtLeast6Db;
+    std::vector<std::uint64_t> episodesAtLeast12Db;
+    std::vector<std::uint64_t> totalEpisodeFramesAtLeast12Db;
+    std::vector<std::uint64_t> maxEpisodeFramesAtLeast12Db;
     std::vector<std::vector<float>> columnGainDb;  // [полоса][столбец графика], dB
 
     // Самое сильное событие (первый канал): фрагмент до и после снижения
