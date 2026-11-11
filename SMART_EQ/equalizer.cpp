@@ -2021,6 +2021,14 @@ DeclipResult declipAudio(
         ? *originalAudio
         : audio;
 
+    // Read-only BetterDeclipper detector port. Its output is diagnostic only:
+    // the existing declipping/restoration path remains unchanged.
+    result.betterDetection = BetterDeclipper::analyze(
+        ceilingAnalysisAudio.samples,
+        static_cast<size_t>(ceilingAnalysisAudio.frameCount),
+        ceilingAnalysisAudio.channels,
+        ceilingAnalysisAudio.sampleRate);
+
     for (size_t channel = 0; channel < ceilingAnalysisAudio.channels; ++channel)
     {
         for (int polarity : { 1, -1 })
