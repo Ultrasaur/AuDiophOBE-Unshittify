@@ -1406,6 +1406,50 @@ int main()
                             << L" | " << fixed << setprecision(2)
                             << meanReductionDb << L" dB"
                             << L" | " << bands.maxReductionDb[band] << L" dB";
+
+                        const std::uint64_t episodes6 =
+                            bands.episodesAtLeast6Db[band];
+                        const std::uint64_t episodes12 =
+                            bands.episodesAtLeast12Db[band];
+
+                        if (episodes6 > 0 || episodes12 > 0)
+                        {
+                            const double total6Seconds =
+                                bands.totalEpisodeFramesAtLeast6Db[band] /
+                                bands.sampleRate;
+                            const double average6Ms = episodes6 > 0
+                                ? 1000.0 * bands.totalEpisodeFramesAtLeast6Db[band] /
+                                    (episodes6 * bands.sampleRate)
+                                : 0.0;
+                            const double maximum6Ms =
+                                1000.0 * bands.maxEpisodeFramesAtLeast6Db[band] /
+                                bands.sampleRate;
+
+                            const double total12Seconds =
+                                bands.totalEpisodeFramesAtLeast12Db[band] /
+                                bands.sampleRate;
+                            const double average12Ms = episodes12 > 0
+                                ? 1000.0 * bands.totalEpisodeFramesAtLeast12Db[band] /
+                                    (episodes12 * bands.sampleRate)
+                                : 0.0;
+                            const double maximum12Ms =
+                                1000.0 * bands.maxEpisodeFramesAtLeast12Db[band] /
+                                bands.sampleRate;
+
+                            bandReductionDetails
+                                << L"\n    >=6 dB episodes: " << episodes6
+                                << L" | total " << fixed << setprecision(2)
+                                << total6Seconds << L" s"
+                                << L" | average " << setprecision(1)
+                                << average6Ms << L" ms"
+                                << L" | max " << maximum6Ms << L" ms"
+                                << L"\n    >=12 dB episodes: " << episodes12
+                                << L" | total " << fixed << setprecision(2)
+                                << total12Seconds << L" s"
+                                << L" | average " << setprecision(1)
+                                << average12Ms << L" ms"
+                                << L" | max " << maximum12Ms << L" ms";
+                        }
                     }
 
                     progress.note(bandReductionDetails.str());
