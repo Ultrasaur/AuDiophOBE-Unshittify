@@ -647,7 +647,7 @@ static double optimizeRepeatedGroup(
         return cost;
     };
 
-    constexpr size_t GRID = 200;
+    constexpr size_t GRID = 32;
     size_t bestIndex = GRID;
     for (size_t i = 0; i <= GRID; ++i)
     {
@@ -671,7 +671,7 @@ static double optimizeRepeatedGroup(
     double x1 = right - golden * (right - left);
     double x2 = left + golden * (right - left);
     double f1 = evaluate(x1, nullptr), f2 = evaluate(x2, nullptr);
-    for (int i = 0; i < 36; ++i)
+    for (int i = 0; i < 24; ++i)
     {
         if (f1 <= f2)
         {
