@@ -1983,8 +1983,9 @@ PeakReductionPlan planPeakReduction(
     const AudioData& audio,
     double ceilingDb,
     double fadeMs,
-    size_t graphColumns, 
-    const ProgressCallback& progress)
+    size_t graphColumns,
+    const ProgressCallback& progress,
+    const AudioData* fixedComponents)
 {
     PeakReductionPlan plan;
 
@@ -2021,13 +2022,25 @@ PeakReductionPlan planPeakReduction(
     // Наибольшее расстояние, на которое пик влияет на усиление
     const size_t reach = half + 3 * smoothRadius;
 
+    const bool hasFixedComponents = fixedComponents != nullptr &&
+        fixedComponents->channels == audio.channels &&
+        fixedComponents->sampleRate == audio.sampleRate &&
+        fixedComponents->frameCount == audio.frameCount &&
+        fixedComponents->samples.size() == audio.samples.size();
+
     auto peakAt = [&](size_t frame)
         {
             float peak = 0.0f;
 
             for (size_t channel = 0; channel < channels; channel++)
             {
-                peak = max(peak, abs(audio.samples[frame * channels + channel]));
+                const size_t index = frame * channels + channel;
+                double value = audio.samples[index];
+
+                if (hasFixedComponents)
+                    value += fixedComponents->samples[index];
+
+                peak = max(peak, static_cast<float>(abs(value)));
             }
 
             return static_cast<double>(peak);
@@ -2035,11 +2048,34 @@ PeakReductionPlan planPeakReduction(
 
     auto needAt = [&](size_t frame)
         {
-            const double peak = peakAt(frame);
+            float required = 1.0f;
 
-            return peak > ceiling
-                ? static_cast<float>(ceiling / peak)
-                : 1.0f;
+            for (size_t channel = 0; channel < channels; channel++)
+            {
+                const size_t index = frame * channels + channel;
+                const double residual = audio.samples[index];
+                const double fixed = hasFixedComponents
+                    ? fixedComponents->samples[index]
+                    : 0.0;
+                const double mixed = residual + fixed;
+
+                if (abs(mixed) <= ceiling ||
+                    residual * mixed <= 0.0 ||
+                    abs(residual) < 1e-12)
+                    continue;
+
+                const double direction = mixed > 0.0 ? 1.0 : -1.0;
+                const double residualContribution = direction * residual;
+                if (residualContribution <= 0.0)
+                    continue;
+
+                const double allowedResidual = ceiling - direction * fixed;
+                const double gain = min(1.0,
+                    max(0.0, allowedResidual / residualContribution));
+                required = min(required, static_cast<float>(gain));
+            }
+
+            return required;
         };
 
     vector<size_t> over;
@@ -2589,7 +2625,8 @@ BandReductionPlan planBandReduction(
     double referenceReleaseMs,
     size_t graphColumns,
     size_t chunkFrames,
-    const ProgressCallback& progress)
+    const ProgressCallback& progress,
+    const AudioData* fixedComponents)
 {
     BandReductionPlan plan;
 
@@ -2607,6 +2644,12 @@ BandReductionPlan planBandReduction(
 
     const size_t channels = audio.channels;
     const size_t frames = static_cast<size_t>(audio.frameCount);
+
+    const bool hasFixedComponents = fixedComponents != nullptr &&
+        fixedComponents->channels == audio.channels &&
+        fixedComponents->sampleRate == audio.sampleRate &&
+        fixedComponents->frameCount == audio.frameCount &&
+        fixedComponents->samples.size() == audio.samples.size();
 
     const size_t totalChunks =
         (frames + chunkFrames - 1) / chunkFrames;
@@ -2663,13 +2706,25 @@ BandReductionPlan planBandReduction(
         }
     }
 
+    const bool hasFixedComponents = fixedComponents != nullptr &&
+        fixedComponents->channels == audio.channels &&
+        fixedComponents->sampleRate == audio.sampleRate &&
+        fixedComponents->frameCount == audio.frameCount &&
+        fixedComponents->samples.size() == audio.samples.size();
+
     auto peakAt = [&](size_t frame)
         {
             float peak = 0.0f;
 
             for (size_t channel = 0; channel < channels; channel++)
             {
-                peak = max(peak, abs(audio.samples[frame * channels + channel]));
+                const size_t index = frame * channels + channel;
+                double value = audio.samples[index];
+
+                if (hasFixedComponents)
+                    value += fixedComponents->samples[index];
+
+                peak = max(peak, static_cast<float>(abs(value)));
             }
 
             return static_cast<double>(peak);
@@ -2818,7 +2873,10 @@ BandReductionPlan planBandReduction(
                 for (size_t channel = 0; channel < channels; channel++)
                 {
                     double z[BAND_COUNT];
-                    double y = 0.0;
+                    double y = hasFixedComponents
+                        ? fixedComponents->samples[
+                            (c0 + i) * channels + channel]
+                        : 0.0;
 
                     for (size_t b = 0; b < BAND_COUNT; b++)
                     {
@@ -2973,9 +3031,15 @@ BandReductionPlan planBandReduction(
                     ? original
                     : static_cast<float>(original + delta);
 
-                if (abs(original) > chunkPeak)
+                const size_t mixIndex = (c0 + f) * channels + channel;
+                const double fixed = hasFixedComponents
+                    ? fixedComponents->samples[mixIndex]
+                    : 0.0;
+                const double mixedOriginal = original + fixed;
+
+                if (abs(mixedOriginal) > chunkPeak)
                 {
-                    chunkPeak = abs(original);
+                    chunkPeak = abs(mixedOriginal);
                     chunkPeakFrame = c0 + f;
                 }
             }
@@ -3020,8 +3084,14 @@ BandReductionPlan planBandReduction(
 
             for (size_t f = from; f < to; f++)
             {
-                plan.eventBefore[f - from] = audio.samples[f * channels];
-                plan.eventAfter[f - from] = out[(f - c0) * channels];
+                const size_t index = f * channels;
+                const double fixed = hasFixedComponents
+                    ? fixedComponents->samples[index]
+                    : 0.0;
+                plan.eventBefore[f - from] = static_cast<float>(
+                    audio.samples[index] + fixed);
+                plan.eventAfter[f - from] = static_cast<float>(
+                    out[(f - c0) * channels] + fixed);
             }
         }
 
