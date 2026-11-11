@@ -1440,7 +1440,8 @@ DeclipResult declipAudio(
     const ProgressCallback& progress,
     const AudioData* repeatedComponents,
     const AudioData* residualAudio,
-    const RepetitionResult* repetitions)
+    const RepetitionResult* repetitions,
+    const AudioData* originalAudio)
 {
     DeclipResult result;
 
@@ -1473,6 +1474,62 @@ DeclipResult declipAudio(
     const size_t channels = audio.channels;
     const size_t blockSize = audio.sampleRate;
     const size_t blockCount = (frames + blockSize - 1) / blockSize;
+
+    // Build a mask using exactly the input-clipping rule from analyzeQuality:
+    // global peak * 0.9995, contiguous runs of at least three samples,
+    // evaluated independently for each channel.
+    vector<vector<uint8_t>> inputClippedMask(
+        channels, vector<uint8_t>(frames, 0));
+
+    if (originalAudio != nullptr &&
+        originalAudio->channels == audio.channels &&
+        originalAudio->frameCount == audio.frameCount &&
+        originalAudio->samples.size() == audio.samples.size() &&
+        !originalAudio->samples.empty())
+    {
+        double originalPeak = 0.0;
+        for (float sample : originalAudio->samples)
+            originalPeak = max(originalPeak, abs(static_cast<double>(sample)));
+
+        if (originalPeak >= 0.1)
+        {
+            const double inputClipThreshold = originalPeak * 0.9995;
+
+            for (size_t ch = 0; ch < channels; ++ch)
+            {
+                size_t runStart = 0;
+                size_t runLength = 0;
+
+                for (size_t frame = 0; frame <= frames; ++frame)
+                {
+                    const bool aboveThreshold = frame < frames &&
+                        abs(static_cast<double>(
+                            originalAudio->samples[frame * channels + ch])) >=
+                            inputClipThreshold;
+
+                    if (aboveThreshold)
+                    {
+                        if (runLength == 0)
+                            runStart = frame;
+                        ++runLength;
+                    }
+                    else
+                    {
+                        if (runLength >= 3)
+                        {
+                            for (size_t f = runStart;
+                                f < runStart + runLength; ++f)
+                            {
+                                inputClippedMask[ch][f] = 1;
+                            }
+                        }
+
+                        runLength = 0;
+                    }
+                }
+            }
+        }
+    }
 
     // Frames belonging to a repeated component with a clean reference are
     // excluded from the legacy declipper. The component itself is either kept
@@ -1896,11 +1953,32 @@ DeclipResult declipAudio(
             const size_t first = run.first;
             const size_t last = run.first + run.length - 1;
 
+            size_t overlapSamples = 0;
+            for (size_t k = 0; k < run.length; ++k)
+            {
+                if (inputClippedMask[channel][first + k])
+                    ++overlapSamples;
+            }
+
+            result.legacyCandidateOverlapSamples += overlapSamples;
+
+            if (overlapSamples == 0)
+                ++result.legacyCandidateNoOverlapRuns;
+            else if (overlapSamples == run.length)
+                ++result.legacyCandidateFullOverlapRuns;
+            else
+                ++result.legacyCandidatePartialOverlapRuns;
+
             if (run.length > maxRunLength)
             {
                 result.skipped++;
                 result.legacySkippedRuns++;
                 result.legacyTooLongRuns++;
+                if (overlapSamples > 0)
+                {
+                    ++result.legacySkippedOverlapRuns;
+                    result.legacySkippedOverlapSamples += overlapSamples;
+                }
                 continue;
             }
 
@@ -1909,6 +1987,11 @@ DeclipResult declipAudio(
                 result.skipped++;
                 result.legacySkippedRuns++;
                 result.legacyEdgeRuns++;
+                if (overlapSamples > 0)
+                {
+                    ++result.legacySkippedOverlapRuns;
+                    result.legacySkippedOverlapSamples += overlapSamples;
+                }
                 continue;
             }
 
@@ -1986,6 +2069,11 @@ DeclipResult declipAudio(
                 }
 
                 result.legacyOvershootRejectedRuns++;
+                if (overlapSamples > 0)
+                {
+                    ++result.legacyRejectedOverlapRuns;
+                    result.legacyRejectedOverlapSamples += overlapSamples;
+                }
                 continue;
             }
 
@@ -1999,6 +2087,11 @@ DeclipResult declipAudio(
             result.runs++;
             result.samples += run.length;
             result.legacyRestoredRuns++;
+            if (overlapSamples > 0)
+            {
+                ++result.legacyRestoredOverlapRuns;
+                result.legacyRestoredOverlapSamples += overlapSamples;
+            }
         }
 
         for (size_t f = 0; f < frames; f++)
