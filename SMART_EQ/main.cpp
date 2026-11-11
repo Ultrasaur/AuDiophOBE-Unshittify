@@ -242,6 +242,10 @@ bool readNumber(
 // Выбор коэффициента эквализации
 bool selectIntensity(double& intensity)
 {
+    // Enter must always select full equalization, even if the caller's
+    // settings object was initialized with a different intensity.
+    intensity = 1.0;
+
     wcout << L"Select equalization strength:" << endl;
     wcout << L"  0 - 0%" << endl;
     wcout << L"  1 - 25%" << endl;
@@ -267,7 +271,6 @@ bool selectIntensity(double& intensity)
 
         if (line.empty() || line == L"4")
         {
-            intensity = 1.0;
             return true;
         }
 
