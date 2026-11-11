@@ -480,6 +480,48 @@ static string escapeXml(const string& text)
     return result;
 }
 
+// Двухколоночный заголовок SVG-графиков.
+static void writeGraphTitle(ofstream& file, const string& title, double width)
+{
+    const size_t declipPosition = title.find(" | declip ");
+    string left = declipPosition == string::npos ? title : title.substr(0, declipPosition);
+    string right = declipPosition == string::npos ? string() : title.substr(declipPosition + 3);
+
+    string leftFirst = left;
+    string leftSecond;
+    const size_t firstSeparator = left.find(" | ");
+    const size_t secondSeparator = firstSeparator == string::npos
+        ? string::npos
+        : left.find(" | ", firstSeparator + 3);
+    if (secondSeparator != string::npos)
+    {
+        leftFirst = left.substr(0, secondSeparator);
+        leftSecond = left.substr(secondSeparator + 3);
+    }
+
+    string rightFirst = right;
+    string rightSecond;
+    const size_t rightSplit = right.find(", attack ");
+    if (rightSplit != string::npos)
+    {
+        rightFirst = right.substr(0, rightSplit);
+        rightSecond = right.substr(rightSplit + 2);
+    }
+
+    file << "<text x=\"24\" y=\"18\" text-anchor=\"start\" font-size=\"12\" font-weight=\"bold\" fill=\"#222222\">"
+        << escapeXml(leftFirst) << "</text>\\n";
+    if (!leftSecond.empty())
+        file << "<text x=\"24\" y=\"34\" text-anchor=\"start\" font-size=\"12\" font-weight=\"bold\" fill=\"#222222\">"
+            << escapeXml(leftSecond) << "</text>\\n";
+
+    if (!rightFirst.empty())
+        file << "<text x=\"" << width - 24.0 << "\" y=\"18\" text-anchor=\"end\" font-size=\"12\" font-weight=\"bold\" fill=\"#222222\">"
+            << escapeXml(rightFirst) << "</text>\\n";
+    if (!rightSecond.empty())
+        file << "<text x=\"" << width - 24.0 << "\" y=\"34\" text-anchor=\"end\" font-size=\"12\" font-weight=\"bold\" fill=\"#222222\">"
+            << escapeXml(rightSecond) << "</text>\\n";
+}
+
 // Сохранение графика кривой коррекции в SVG
 bool saveEqualizerGraph(
     const Spectrum& spectrum,
@@ -569,9 +611,7 @@ bool saveEqualizerGraph(
     file << "<rect width=\"100%\" height=\"100%\" fill=\"#ffffff\"/>\n";
 
     // Заголовок
-    file << "<text x=\"" << WIDTH / 2.0 << "\" y=\"24\" "
-        << "text-anchor=\"middle\" font-size=\"15\" font-weight=\"bold\" "
-        << "fill=\"#222222\">" << escapeXml(title) << "</text>\n";
+    writeGraphTitle(file, title, WIDTH);
 
     // Горизонтальная сетка и подписи по оси dB
     for (double db = -limit; db <= limit + 1e-9; db += step)
@@ -836,9 +876,7 @@ bool saveSpectrumComparisonGraph(
     file << "<rect width=\"100%\" height=\"100%\" fill=\"#ffffff\"/>\n";
 
     // Заголовок
-    file << "<text x=\"" << WIDTH / 2.0 << "\" y=\"24\" "
-        << "text-anchor=\"middle\" font-size=\"15\" font-weight=\"bold\" "
-        << "fill=\"#222222\">" << escapeXml(title) << "</text>\n";
+    writeGraphTitle(file, title, WIDTH);
 
     // Горизонтальная сетка и подписи по оси dB
     for (double db = yMin; db <= yMax + 1e-9; db += step)
@@ -2229,6 +2267,8 @@ string getBandLabel(size_t band)
         {
             ostringstream text;
 
+            text << defaultfloat << setprecision(3);
+
             if (hz >= 1000.0)
             {
                 text << hz / 1000.0 << "k";
@@ -3340,9 +3380,7 @@ bool saveDeclipGraph(
 
     file << "<rect width=\"100%\" height=\"100%\" fill=\"#ffffff\"/>\n";
 
-    file << "<text x=\"" << WIDTH / 2.0 << "\" y=\"24\" "
-        << "text-anchor=\"middle\" font-size=\"15\" font-weight=\"bold\" "
-        << "fill=\"#222222\">" << escapeXml(title) << "</text>\n";
+    writeGraphTitle(file, title, WIDTH);
 
     // Легенда
     {
@@ -3733,9 +3771,7 @@ bool saveBandReductionGraph(
 
     file << "<rect width=\"100%\" height=\"100%\" fill=\"#ffffff\"/>\n";
 
-    file << "<text x=\"" << WIDTH / 2.0 << "\" y=\"24\" "
-        << "text-anchor=\"middle\" font-size=\"15\" font-weight=\"bold\" "
-        << "fill=\"#222222\">" << escapeXml(title) << "</text>\n";
+    writeGraphTitle(file, title, WIDTH);
 
     // Подпись дорожек
     {
