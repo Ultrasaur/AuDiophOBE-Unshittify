@@ -1211,8 +1211,23 @@ int main()
                         << L" | clipped runs " << restoredQuality.clippedRuns
                         << L" | clipped samples " << restoredQuality.clippedSamples
                         << L" | restored runs " << declip.runs
-                        << L" | skipped runs " << declip.skipped;
-                    progress.note(info.str());
+                        << L" | skipped runs " << declip.skipped
+                        << L" | repeated groups with/without clean reference "
+                        << declip.repeatedGroupsWithCleanReference << L"/"
+                        << declip.repeatedGroupsWithoutCleanReference
+                        << L" | repeated occurrences protected/reconstructed "
+                        << declip.repeatedOccurrencesProtected << L"/"
+                        << declip.repeatedOccurrencesReconstructed
+                        << L" | repeated runs/samples "
+                        << declip.repeatedRuns << L"/" << declip.repeatedSamples
+                        << L" | legacy detected/restored "
+                        << declip.legacyDetectedRuns << L"/"
+                        << declip.legacyRestoredRuns
+                        << L" | legacy overshoot rejected/skipped "
+                        << declip.legacyOvershootRejectedRuns << L"/"
+                        << declip.legacySkippedRuns;
+                    progress.note(L"[Diagnostics] " +
+                        job.input.filename().wstring() + L" | " + info.str());
                 }
 
                 const bool hasRepeatedGroups =
