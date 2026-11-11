@@ -10,9 +10,10 @@
 #include <map>
 #include <iterator>
 #include <array>
-#include <iostream>
 #include <chrono>
 #include <utility>
+#include <sstream>
+#include <iomanip>
 
 namespace
 {
@@ -778,8 +779,10 @@ bool separateRepeatedComponents(
     AudioData& residual,
     const RepetitionSettings& settings,
     RepetitionResult& result,
-    std::string& error)
+    std::string& error,
+    std::string& diagnostics)
 {
+    diagnostics.clear();
     const auto totalStart = std::chrono::steady_clock::now();
 
     result = {};
@@ -1169,15 +1172,6 @@ bool separateRepeatedComponents(
     const auto groupingEnd = std::chrono::steady_clock::now();
     groupingTime = groupingEnd - groupingStart;
 
-    std::cerr
-        << "\n[Repetition diagnostics]\n"
-        << "Eligible frames: " << totalEligibleFrames << "\n"
-        << "Candidate pairs: " << totalCandidates << "\n"
-        << "Candidate pairs passing coarse check: " << totalCoarsePasses << "\n"
-        << "Candidate pairs passing full check: " << totalFullPasses << "\n"
-        << "Accepted groups: " << result.groups << "\n"
-        << "Accepted occurrences: " << result.occurrences << "\n";
-
     // Поэтому сумма выходов восстанавливает исходный сигнал.
     const auto residualStart = std::chrono::steady_clock::now();
     for (size_t i = 0; i < input.samples.size(); ++i)
@@ -1191,13 +1185,23 @@ bool separateRepeatedComponents(
     const auto totalEnd = std::chrono::steady_clock::now();
     const std::chrono::duration<double> totalTime = totalEnd - totalStart;
 
-    std::cerr
-        << "\n[Repetition timing]\n"
+    std::ostringstream diagnosticStream;
+    diagnosticStream << std::fixed << std::setprecision(3)
+        << "[Repetition diagnostics]\n"
+        << "Eligible frames: " << totalEligibleFrames << "\n"
+        << "Candidate pairs: " << totalCandidates << "\n"
+        << "Candidate pairs passing coarse check: " << totalCoarsePasses << "\n"
+        << "Candidate pairs passing full check: " << totalFullPasses << "\n"
+        << "Accepted groups: " << result.groups << "\n"
+        << "Accepted occurrences: " << result.occurrences << "\n\n"
+        << "[Repetition timing]\n"
         << "Candidate generation: " << candidateGenerationTime.count() << " s\n"
         << "Fragment comparison: " << comparisonTime.count() << " s\n"
         << "Grouping: " << groupingTime.count() << " s\n"
         << "Residual creation: " << residualTime.count() << " s\n"
-        << "Total: " << totalTime.count() << " s\n";
+        << "Total: " << totalTime.count() << " s";
+
+    diagnostics = diagnosticStream.str();
 
     error.clear();
     return true;
