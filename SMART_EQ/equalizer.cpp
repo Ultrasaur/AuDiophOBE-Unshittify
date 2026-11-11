@@ -1560,7 +1560,12 @@ DeclipResult declipAudio(
             // Without a clean occurrence, leave the group to the original
             // declipping algorithm unchanged.
             if (referenceIndex == group.occurrences.size())
+            {
+                ++result.repeatedGroupsWithoutCleanReference;
                 continue;
+            }
+
+            ++result.repeatedGroupsWithCleanReference;
 
             const RepetitionOccurrence& reference =
                 group.occurrences[referenceIndex];
@@ -1614,6 +1619,7 @@ DeclipResult declipAudio(
 
                 if (componentClips)
                 {
+                    ++result.repeatedOccurrencesReconstructed;
                     // Rebuild only the repeated component. The residual
                     // preserves every other sound at this time position.
                     for (size_t i = 0; i < group.length; ++i)
@@ -1684,12 +1690,15 @@ DeclipResult declipAudio(
                             result.segments.push_back(segment);
                             result.runs++;
                             result.samples += segment.length;
+                            result.repeatedRuns++;
+                            result.repeatedSamples += segment.length;
                         }
                     }
                 }
 
                 // Protect the entire occurrence when a clean reference exists:
                 // a non-clipping repeat must remain untouched.
+                ++result.repeatedOccurrencesProtected;
                 fill(
                     protectedFrames.begin() + target.start,
                     protectedFrames.begin() + target.start + group.length,
@@ -1853,6 +1862,8 @@ DeclipResult declipAudio(
         }
 
         // Восстановление найденных серий
+        result.legacyDetectedRuns += runs.size();
+
         for (size_t runIndex = 0; runIndex < runs.size(); runIndex++)
         {
             const Run& run = runs[runIndex];
@@ -1869,6 +1880,7 @@ DeclipResult declipAudio(
                 last + 2 >= frames)
             {
                 result.skipped++;
+                result.legacySkippedRuns++;
                 continue;
             }
 
@@ -1945,6 +1957,7 @@ DeclipResult declipAudio(
                     signal[first + k] = saved[k];
                 }
 
+                result.legacyOvershootRejectedRuns++;
                 continue;
             }
 
@@ -1957,6 +1970,7 @@ DeclipResult declipAudio(
 
             result.runs++;
             result.samples += run.length;
+            result.legacyRestoredRuns++;
         }
 
         for (size_t f = 0; f < frames; f++)
