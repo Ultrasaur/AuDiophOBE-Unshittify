@@ -2657,6 +2657,12 @@ BandReductionPlan planBandReduction(
     plan.framesReducedAtLeast12Db.assign(BAND_COUNT, 0);
     plan.framesAtReductionLimit.assign(BAND_COUNT, 0);
     plan.sumReductionDb.assign(BAND_COUNT, 0.0);
+    plan.episodesAtLeast6Db.assign(BAND_COUNT, 0);
+    plan.totalEpisodeFramesAtLeast6Db.assign(BAND_COUNT, 0);
+    plan.maxEpisodeFramesAtLeast6Db.assign(BAND_COUNT, 0);
+    plan.episodesAtLeast12Db.assign(BAND_COUNT, 0);
+    plan.totalEpisodeFramesAtLeast12Db.assign(BAND_COUNT, 0);
+    plan.maxEpisodeFramesAtLeast12Db.assign(BAND_COUNT, 0);
     plan.columnGainDb.assign(BAND_COUNT, vector<float>(graphColumns, 0.0f));
 
     if (audio.channels == 0 ||
@@ -2752,6 +2758,41 @@ BandReductionPlan planBandReduction(
 
     double strongestPeak = 0.0;
 
+    // Track contiguous frames above the 6 dB and 12 dB attenuation thresholds.
+    // State is kept outside the chunk loop so episodes can cross chunk boundaries.
+    array<uint64_t, BAND_COUNT> currentEpisode6{};
+    array<uint64_t, BAND_COUNT> currentEpisode12{};
+
+    auto finishEpisode = [](size_t band, uint64_t& length,
+        vector<uint64_t>& counts,
+        vector<uint64_t>& totalFrames,
+        vector<uint64_t>& maximumFrames)
+        {
+            if (length == 0)
+                return;
+
+            counts[band]++;
+            totalFrames[band] += length;
+            maximumFrames[band] = max(maximumFrames[band], length);
+            length = 0;
+        };
+
+    auto finishAllEpisodes = [&]()
+        {
+            for (size_t band = 0; band < BAND_COUNT; band++)
+            {
+                finishEpisode(band, currentEpisode6[band],
+                    plan.episodesAtLeast6Db,
+                    plan.totalEpisodeFramesAtLeast6Db,
+                    plan.maxEpisodeFramesAtLeast6Db);
+
+                finishEpisode(band, currentEpisode12[band],
+                    plan.episodesAtLeast12Db,
+                    plan.totalEpisodeFramesAtLeast12Db,
+                    plan.maxEpisodeFramesAtLeast12Db);
+            }
+        };
+
     LowpassCoefficients lowpassCoefficients[BAND_COUNT - 1];
 
     for (size_t b = 0; b + 1 < BAND_COUNT; b++)
@@ -2814,6 +2855,9 @@ BandReductionPlan planBandReduction(
                     envelopeState[iteration][b] = 1.0;
                 }
             }
+
+            // This chunk contains no attenuation, so any active episode ends here.
+            finishAllEpisodes();
 
             processedChunks++;
 
@@ -3025,11 +3069,14 @@ BandReductionPlan planBandReduction(
                     ? gain[b * workLength + f]
                     : 1.0f;
 
+                const double db = g[b] < 1.0f
+                    ? 20.0 * log10(static_cast<double>(g[b]))
+                    : 0.0;
+
                 if (g[b] < 1.0f)
                 {
                     frameAffected = true;
 
-                    const double db = 20.0 * log10(static_cast<double>(g[b]));
                     plan.maxReductionDb[b] = min(plan.maxReductionDb[b], db);
                     plan.affectedFramesByBand[b]++;
                     plan.sumReductionDb[b] += db;
@@ -3059,6 +3106,22 @@ BandReductionPlan planBandReduction(
                             static_cast<float>(db));
                     }
                 }
+
+                if (db <= -6.0)
+                    currentEpisode6[b]++;
+                else
+                    finishEpisode(b, currentEpisode6[b],
+                        plan.episodesAtLeast6Db,
+                        plan.totalEpisodeFramesAtLeast6Db,
+                        plan.maxEpisodeFramesAtLeast6Db);
+
+                if (db <= -12.0)
+                    currentEpisode12[b]++;
+                else
+                    finishEpisode(b, currentEpisode12[b],
+                        plan.episodesAtLeast12Db,
+                        plan.totalEpisodeFramesAtLeast12Db,
+                        plan.maxEpisodeFramesAtLeast12Db);
             }
 
             for (size_t channel = 0; channel < channels; channel++)
@@ -3153,6 +3216,9 @@ BandReductionPlan planBandReduction(
                 100.0 * processedChunks / totalChunks));
         }
     }
+
+    // Close episodes that remain active at the end of the final chunk.
+    finishAllEpisodes();
 
     if (progress)
     {
