@@ -11,7 +11,7 @@ struct RepetitionSettings
 {
     // Допустимая длительность повторяющегося фрагмента
     size_t minFragmentMs = 50;
-    size_t maxFragmentMs = 200;
+    size_t maxFragmentMs = 400;
 
     // Шаг первоначального поиска
     size_t searchHopMs = 10;
