@@ -1371,6 +1371,42 @@ int main()
                         << L" frames (max " << residual.maxReductionDb << L" dB)";
                     progress.note(preliminaryReductionInfo.str());
 
+                    // Detailed distribution of multiband attenuation by frequency band.
+                    // Counts are per audio frame, not per channel or per sample.
+                    wostringstream bandReductionDetails;
+                    bandReductionDetails
+                        << L"Per-band reduction statistics:"
+                        << L" frames | >=3 dB | >=6 dB | >=12 dB | at -18 dB"
+                        << L" | mean | max";
+
+                    for (size_t band = 0; band < BAND_COUNT; band++)
+                    {
+                        const uint64_t affected =
+                            bands.affectedFramesByBand[band];
+
+                        if (affected == 0)
+                            continue;
+
+                        const double meanReductionDb =
+                            bands.sumReductionDb[band] /
+                            static_cast<double>(affected);
+
+                        bandReductionDetails
+                            << L"\n" << wstring(
+                                getBandLabel(band).begin(),
+                                getBandLabel(band).end())
+                            << L" | " << affected
+                            << L" | " << bands.framesReducedAtLeast3Db[band]
+                            << L" | " << bands.framesReducedAtLeast6Db[band]
+                            << L" | " << bands.framesReducedAtLeast12Db[band]
+                            << L" | " << bands.framesAtReductionLimit[band]
+                            << L" | " << fixed << setprecision(2)
+                            << meanReductionDb << L" dB"
+                            << L" | " << bands.maxReductionDb[band] << L" dB";
+                    }
+
+                    progress.note(bandReductionDetails.str());
+
                     // If no multiband event was recorded, use a short neutral
                     // excerpt around the strongest sample so the diagnostic graph
                     // can still be generated with zero band correction.
