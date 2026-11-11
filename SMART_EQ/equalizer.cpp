@@ -1812,6 +1812,7 @@ DeclipResult declipAudio(
             }
 
             const size_t first = frame;
+            double runPeak = abs(value);
 
             size_t nextProgressFrame = 0;
 
@@ -1845,10 +1846,17 @@ DeclipResult declipAudio(
                     break;
                 }
 
+                runPeak = max(runPeak, abs(v));
                 frame++;
             }
 
             const size_t length = frame - first;
+
+            if (length == 1) ++result.legacyCandidateLen1;
+            else if (length == 2) ++result.legacyCandidateLen2;
+            else if (length <= 4) ++result.legacyCandidateLen3To4;
+            else if (length <= 8) ++result.legacyCandidateLen5To8;
+            else ++result.legacyCandidateLen9Plus;
 
             if (length >= minRunLength)
             {
@@ -1862,6 +1870,15 @@ DeclipResult declipAudio(
             else
             {
                 ++result.legacyShortRuns;
+
+                if (runPeak < 0.90)
+                    ++result.legacyShortPeakBelow90;
+                else if (runPeak < 0.98)
+                    ++result.legacyShortPeak90To98;
+                else if (runPeak < 0.999)
+                    ++result.legacyShortPeak98To999;
+                else
+                    ++result.legacyShortPeak999Plus;
             }
         }
 
