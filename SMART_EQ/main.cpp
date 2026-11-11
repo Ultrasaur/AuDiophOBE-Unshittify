@@ -1372,7 +1372,7 @@ int main()
                             }
                         }
 
-                        // Refresh the mix before residual-only multiband analysis.
+                        // Refresh the full mix after residual and repeated-component processing.
                         for (size_t i = 0; i < audio.samples.size(); ++i)
                         {
                             audio.samples[i] =
