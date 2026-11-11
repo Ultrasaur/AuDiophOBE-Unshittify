@@ -509,17 +509,17 @@ static void writeGraphTitle(ofstream& file, const string& title, double width)
     }
 
     file << "<text x=\"24\" y=\"18\" text-anchor=\"start\" font-size=\"12\" font-weight=\"bold\" fill=\"#222222\">"
-        << escapeXml(leftFirst) << "</text>\\n";
+        << escapeXml(leftFirst) << "</text>\n";
     if (!leftSecond.empty())
         file << "<text x=\"24\" y=\"34\" text-anchor=\"start\" font-size=\"12\" font-weight=\"bold\" fill=\"#222222\">"
-            << escapeXml(leftSecond) << "</text>\\n";
+            << escapeXml(leftSecond) << "</text>\n";
 
     if (!rightFirst.empty())
         file << "<text x=\"" << width - 24.0 << "\" y=\"18\" text-anchor=\"end\" font-size=\"12\" font-weight=\"bold\" fill=\"#222222\">"
-            << escapeXml(rightFirst) << "</text>\\n";
+            << escapeXml(rightFirst) << "</text>\n";
     if (!rightSecond.empty())
         file << "<text x=\"" << width - 24.0 << "\" y=\"34\" text-anchor=\"end\" font-size=\"12\" font-weight=\"bold\" fill=\"#222222\">"
-            << escapeXml(rightSecond) << "</text>\\n";
+            << escapeXml(rightSecond) << "</text>\n";
 }
 
 // Сохранение графика кривой коррекции в SVG
