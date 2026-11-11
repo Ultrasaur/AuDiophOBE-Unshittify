@@ -974,16 +974,32 @@ int main()
                     progress.note(info.str());
                 }
 
-                if (declip.runs > 0)
+                const double peakCeiling =
+                    pow(10.0, settings.declipCeilingDb / 20.0);
+
+                bool mixExceedsCeiling = false;
+                for (float sample : audio.samples)
                 {
-                    saveDeclipGraph(
-                        originalAudio,
-                        audio,
-                        declip,
-                        job.graphDeclip,
-                        graphTitle,
-                        graphError
-                    );
+                    if (abs(static_cast<double>(sample)) > peakCeiling)
+                    {
+                        mixExceedsCeiling = true;
+                        break;
+                    }
+                }
+
+                if (declip.runs > 0 || mixExceedsCeiling)
+                {
+                    if (declip.runs > 0)
+                    {
+                        saveDeclipGraph(
+                            originalAudio,
+                            audio,
+                            declip,
+                            job.graphDeclip,
+                            graphTitle,
+                            graphError
+                        );
+                    }
 
                     originalAudio.samples.clear();
                     originalAudio.samples.shrink_to_fit();
@@ -1086,7 +1102,9 @@ int main()
                                         const double mixed =
                                             repeatedValue + residualValue;
 
-                                        if (mixed > ceiling && repeatedValue > 1e-12)
+                                        if (mixed > ceiling &&
+                                            repeatedValue > 1e-12 &&
+                                            residualValue < ceiling)
                                         {
                                             groupGain = min(
                                                 groupGain,
@@ -1094,7 +1112,8 @@ int main()
                                                 repeatedValue);
                                         }
                                         else if (mixed < -ceiling &&
-                                            repeatedValue < -1e-12)
+                                            repeatedValue < -1e-12 &&
+                                            residualValue > -ceiling)
                                         {
                                             groupGain = min(
                                                 groupGain,
