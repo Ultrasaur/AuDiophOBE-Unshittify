@@ -2651,6 +2651,12 @@ BandReductionPlan planBandReduction(
     BandReductionPlan plan;
 
     plan.maxReductionDb.assign(BAND_COUNT, 0.0);
+    plan.affectedFramesByBand.assign(BAND_COUNT, 0);
+    plan.framesReducedAtLeast3Db.assign(BAND_COUNT, 0);
+    plan.framesReducedAtLeast6Db.assign(BAND_COUNT, 0);
+    plan.framesReducedAtLeast12Db.assign(BAND_COUNT, 0);
+    plan.framesAtReductionLimit.assign(BAND_COUNT, 0);
+    plan.sumReductionDb.assign(BAND_COUNT, 0.0);
     plan.columnGainDb.assign(BAND_COUNT, vector<float>(graphColumns, 0.0f));
 
     if (audio.channels == 0 ||
@@ -3025,6 +3031,22 @@ BandReductionPlan planBandReduction(
 
                     const double db = 20.0 * log10(static_cast<double>(g[b]));
                     plan.maxReductionDb[b] = min(plan.maxReductionDb[b], db);
+                    plan.affectedFramesByBand[b]++;
+                    plan.sumReductionDb[b] += db;
+
+                    if (db <= -3.0)
+                        plan.framesReducedAtLeast3Db[b]++;
+
+                    if (db <= -6.0)
+                        plan.framesReducedAtLeast6Db[b]++;
+
+                    if (db <= -12.0)
+                        plan.framesReducedAtLeast12Db[b]++;
+
+                    // The gain is clamped to -18 dB; allow a small
+                    // floating-point tolerance when counting limit hits.
+                    if (db <= -17.99)
+                        plan.framesAtReductionLimit[b]++;
 
                     if (graphColumns > 0)
                     {
