@@ -2525,6 +2525,7 @@ static size_t getBandReleaseSamples(
 {
     constexpr double REFERENCE_FREQUENCY_HZ = 1000.0;
     constexpr double MIN_RELEASE_TIME_MS = 10.0;
+    constexpr double MAX_RELEASE_TIME_MS = 1000.0;
 
     const double centerFrequency = max(
         getBandCenterFrequency(band, sampleRate), 1.0);
@@ -2533,8 +2534,11 @@ static size_t getBandReleaseSamples(
         max(0.1, referenceReleaseMs) *
         (REFERENCE_FREQUENCY_HZ / centerFrequency);
 
-    const double releaseMs = max(
-        calculatedReleaseMs, MIN_RELEASE_TIME_MS);
+    // Ограничиваем длительность восстановления, чтобы низкие частоты
+    // не оставались ослабленными на протяжении нескольких секунд.
+    const double releaseMs = min(
+        max(calculatedReleaseMs, MIN_RELEASE_TIME_MS),
+        MAX_RELEASE_TIME_MS);
 
     return max<size_t>(
         1,
