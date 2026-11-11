@@ -17,6 +17,7 @@
 #include <atomic>
 #include <cstdlib>
 #include <cmath>
+#include <limits>
 #include <utility>
 
 #include "audio.h"
@@ -652,7 +653,8 @@ static double optimizeRepeatedGroup(
     {
         const double gr = minimumGain + (1.0 - minimumGain) * i / GRID;
         const double cost = evaluate(gr, nullptr);
-        if (cost < bestCost)
+        if (cost < bestCost - 1e-12 ||
+            (abs(cost - bestCost) <= 1e-12 && gr > bestGain))
         {
             bestCost = cost;
             bestGain = gr;
@@ -695,8 +697,16 @@ static double optimizeRepeatedGroup(
         vector<float> smoothed(bestResidualGains.size(), 1.0f);
         for (size_t i = 0; i < bestResidualGains.size(); ++i)
         {
-            const size_t first = i > radius ? i - radius : 0;
-            const size_t last = min(bestResidualGains.size() - 1, i + radius);
+            size_t first = i;
+            while (first > 0 &&
+                groupFrames[i] - groupFrames[first - 1] <= radius)
+                --first;
+
+            size_t last = i;
+            while (last + 1 < groupFrames.size() &&
+                groupFrames[last + 1] - groupFrames[i] <= radius)
+                ++last;
+
             float value = 1.0f;
             for (size_t j = first; j <= last; ++j)
                 value = min(value, bestResidualGains[j]);
@@ -1193,15 +1203,11 @@ int main()
                     originalAudio.samples.clear();
                     originalAudio.samples.shrink_to_fit();
 
-                    // First create headroom by reducing peaks in the non-repeating residual.
-                    // Detection sees the full mix, but only the residual is changed.
+                    // First reduce peaks that exceed the working ceiling in the residual
+                    // itself. Combined repeated/residual peaks are handled jointly below.
                     AudioData& bandTarget = hasRepeatedGroups
                         ? residualAudio
                         : audio;
-
-                    const AudioData* fixedComponents = hasRepeatedGroups
-                        ? &repeatedProcessed
-                        : nullptr;
 
                     BandReductionPlan bands = planBandReduction(
                         bandTarget,
