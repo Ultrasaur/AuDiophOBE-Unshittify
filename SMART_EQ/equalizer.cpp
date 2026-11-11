@@ -3974,7 +3974,9 @@ bool saveRepeatedComponentsGraph(
         if (groupAudio.frameCount > 0 &&
             groupAudio.sampleRate >= 40000)
         {
-            size_t fftSize = 2048;
+            // Use the longest practical window for low-frequency resolution;
+            // short fragments automatically fall back to a smaller FFT.
+            size_t fftSize = 8192;
 
             while (fftSize > group.length && fftSize > 256)
                 fftSize >>= 1;
