@@ -1229,7 +1229,18 @@ int main()
                         << L" | too long/edge/short "
                         << declip.legacyTooLongRuns << L"/"
                         << declip.legacyEdgeRuns << L"/"
-                        << declip.legacyShortRuns;
+                        << declip.legacyShortRuns
+                        << L" | candidate lengths 1/2/3-4/5-8/9+ "
+                        << declip.legacyCandidateLen1 << L"/"
+                        << declip.legacyCandidateLen2 << L"/"
+                        << declip.legacyCandidateLen3To4 << L"/"
+                        << declip.legacyCandidateLen5To8 << L"/"
+                        << declip.legacyCandidateLen9Plus
+                        << L" | short peak <.90/.90-.98/.98-.999/>=.999 "
+                        << declip.legacyShortPeakBelow90 << L"/"
+                        << declip.legacyShortPeak90To98 << L"/"
+                        << declip.legacyShortPeak98To999 << L"/"
+                        << declip.legacyShortPeak999Plus;
                     progress.note(L"[Diagnostics] " +
                         job.input.filename().wstring() + L" | " + info.str());
                 }
