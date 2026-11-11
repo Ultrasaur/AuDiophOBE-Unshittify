@@ -3805,7 +3805,7 @@ bool saveRepeatedComponentsGraph(
     writeGraphTitle(file, title + " | Repeated component diagnostics", WIDTH);
 
     file << "<text x=\"" << timeLeft << "\" y=\"58\" "
-        << "font-weight=\"bold\" fill=\"#222222\">Amplitude envelope by relative time</text>\n";
+        << "font-weight=\"bold\" fill=\"#222222\">Group attenuation across full track</text>\n";
     file << "<text x=\"" << spectrumLeft << "\" y=\"58\" "
         << "font-weight=\"bold\" fill=\"#222222\">Average spectrum of group occurrences</text>\n";
 
@@ -3835,15 +3835,11 @@ bool saveRepeatedComponentsGraph(
             << "\" font-size=\"14\" font-weight=\"bold\" fill=\"#222222\">"
             << escapeXml(heading.str()) << "</text>\n";
 
-        // Усреднённая RMS-огибающая по всем вхождениям группы.
-        vector<double> averagePower(envelopeColumns, 0.0);
-        vector<size_t> validOccurrences(envelopeColumns, 0);
-
+        // Собираем вхождения для усреднённого спектра.
+        // Временная дорожка показывает снижение группы на шкале всего трека.
         AudioData groupAudio = {};
         groupAudio.channels = repeatedAudio.channels;
         groupAudio.sampleRate = repeatedAudio.sampleRate;
-
-        size_t validOccurrenceCount = 0;
 
         for (const RepetitionOccurrence& occurrence : group.occurrences)
         {
@@ -3857,41 +3853,6 @@ bool saveRepeatedComponentsGraph(
 
             if (available == 0)
                 continue;
-
-            validOccurrenceCount++;
-
-            for (size_t column = 0; column < envelopeColumns; ++column)
-            {
-                const size_t from =
-                    available * column / envelopeColumns;
-                const size_t to = max(
-                    from + 1,
-                    available * (column + 1) / envelopeColumns);
-
-                double power = 0.0;
-                size_t sampleCount = 0;
-
-                for (size_t frame = from; frame < to && frame < available; ++frame)
-                {
-                    const size_t sourceFrame = occurrence.start + frame;
-
-                    for (size_t channel = 0;
-                        channel < repeatedAudio.channels; ++channel)
-                    {
-                        const double sample = repeatedAudio.samples[
-                            sourceFrame * repeatedAudio.channels + channel];
-
-                        power += sample * sample;
-                        sampleCount++;
-                    }
-                }
-
-                if (sampleCount > 0)
-                {
-                    averagePower[column] += power / sampleCount;
-                    validOccurrences[column]++;
-                }
-            }
 
             const size_t oldSize = groupAudio.samples.size();
             groupAudio.samples.resize(
@@ -3907,64 +3868,85 @@ bool saveRepeatedComponentsGraph(
         groupAudio.frameCount =
             groupAudio.samples.size() / groupAudio.channels;
 
-        // Сетка и шкала огибающей в dBFS.
-        for (int tick = 0; tick <= 3; ++tick)
+        const double trackDuration =
+            static_cast<double>(repeatedAudio.frameCount) /
+            repeatedAudio.sampleRate;
+
+        // Шкала времени совпадает со шкалой графика multiband reduction.
+        double timeStep = 3600.0;
+
+        for (double candidate : { 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0,
+            15.0, 30.0, 60.0, 120.0, 300.0, 600.0, 1200.0, 1800.0, 3600.0 })
         {
-            const double db = -60.0 + tick * 20.0;
-            const double y = plotTop +
-                plotHeight * (0.0 - db) / 60.0;
-
-            file << "<line x1=\"" << timeLeft << "\" y1=\"" << y
-                << "\" x2=\"" << timeLeft + timeWidth << "\" y2=\"" << y
-                << "\" stroke=\"#e5e5e5\"/>\n";
-
-            file << "<text x=\"" << timeLeft - 8.0 << "\" y=\"" << y + 4.0
-                << "\" text-anchor=\"end\" fill=\"#555555\">"
-                << db << "</text>\n";
+            if (trackDuration / candidate <= 10.0)
+            {
+                timeStep = candidate;
+                break;
+            }
         }
 
-        file << "<text x=\"" << timeLeft + timeWidth / 2.0
-            << "\" y=\"" << plotBottom + 27.0
-            << "\" text-anchor=\"middle\" fill=\"#444444\">"
-            << "Relative time within sound (ms; group length "
-            << setprecision(1)
-            << 1000.0 * group.length / repeatedAudio.sampleRate
-            << ")</text>\n";
+        const bool minutes = trackDuration >= 120.0;
+        const int decimals = timeStep < 1.0 ? 1 : 0;
+
+        for (double time = 0.0; time <= trackDuration + 1e-9;
+            time += timeStep)
+        {
+            const double x = timeLeft +
+                timeWidth * time / trackDuration;
+
+            file << "<line x1=\"" << x << "\" y1=\"" << plotTop
+                << "\" x2=\"" << x << "\" y2=\"" << plotBottom
+                << "\" stroke=\"#eeeeee\"/>\\n";
+
+            file << "<text x=\"" << x << "\" y=\"" << plotBottom + 18.0
+                << "\" text-anchor=\"middle\" fill=\"#555555\">"
+                << formatTimeLabel(time, minutes, decimals) << "</text>\\n";
+        }
 
         file << "<rect x=\"" << timeLeft << "\" y=\"" << plotTop
             << "\" width=\"" << timeWidth << "\" height=\"" << plotHeight
-            << "\" fill=\"none\" stroke=\"#888888\"/>\n";
+            << "\" fill=\"none\" stroke=\"#888888\"/>\\n";
 
-        if (validOccurrenceCount > 0)
+        // Высота заполнения показывает глубину снижения; сами сегменты
+        // расположены строго на временных интервалах обнаруженных вхождений.
+        const double reductionDepth = max(1.0, ceil(-reductionDb));
+        const double attenuationHeight = plotHeight *
+            clamp(-reductionDb / reductionDepth, 0.0, 1.0);
+
+        if (reductionDb < -0.005)
         {
-            file << "<polyline fill=\"none\" stroke=\"#1f6feb\" "
-                << "stroke-width=\"2\" points=\"";
-
-            for (size_t column = 0; column < envelopeColumns; ++column)
+            for (const RepetitionOccurrence& occurrence : group.occurrences)
             {
-                const double power = validOccurrences[column] > 0
-                    ? averagePower[column] / validOccurrences[column]
-                    : 0.0;
+                if (occurrence.start >= repeatedAudio.frameCount)
+                    continue;
 
-                const double db = 20.0 * log10(
-                    max(sqrt(power), 1e-6));
+                const size_t endFrame = min(
+                    repeatedAudio.frameCount,
+                    occurrence.start + group.length);
 
-                const double clampedDb = clamp(db, -60.0, 0.0);
-                const double x = timeLeft +
-                    timeWidth * column / (envelopeColumns - 1);
-                const double y = plotTop +
-                    plotHeight * (0.0 - clampedDb) / 60.0;
+                if (endFrame <= occurrence.start)
+                    continue;
 
-                file << x << "," << y << " ";
+                const double x1 = timeLeft + timeWidth *
+                    static_cast<double>(occurrence.start) /
+                    repeatedAudio.frameCount;
+                const double x2 = timeLeft + timeWidth *
+                    static_cast<double>(endFrame) /
+                    repeatedAudio.frameCount;
+
+                file << "<rect x=\"" << x1 << "\" y=\"" << plotTop
+                    << "\" width=\"" << max(1.0, x2 - x1)
+                    << "\" height=\"" << attenuationHeight
+                    << "\" fill=\"#e07b00\" fill-opacity=\"0.70\"/>\\n";
             }
+        }
 
-            file << "\"/>\n";
-        }
-        else
-        {
-            file << "<text x=\"" << timeLeft + 10.0 << "\" y=\""
-                << plotTop + 20.0 << "\" fill=\"#777777\">No valid occurrences</text>\n";
-        }
+        file << "<text x=\"" << timeLeft + timeWidth / 2.0
+            << "\" y=\"" << plotBottom + 34.0
+            << "\" text-anchor=\"middle\" fill=\"#444444\">"
+            << (minutes ? "Track time, min:s" : "Track time, s")
+            << " | reduction scale: 0 to -" << reductionDepth << " dB"
+            << "</text>\\n";
 
         // Спектр строится по конкатенированным фрагментам всех вхождений.
         Spectrum groupSpectrum;
