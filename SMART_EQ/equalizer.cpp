@@ -11,6 +11,561 @@
 
 using namespace std;
 
+namespace
+{
+    struct SmearedFit
+    {
+        bool valid = false;
+        double peak = 0.0;
+        double theta = 0.0;
+        double sigma = 0.0;
+        double bumpRatio = 0.0;
+    };
+
+    double logNormalCdf(double x)
+    {
+        const double sqrtTwo = 1.4142135623730951;
+        const double logTwoPiHalf = 0.9189385332046727;
+
+        if (x > 8.0)
+            return 0.0;
+
+        if (x < -8.0)
+        {
+            const double z = -x;
+            const double inv2 = 1.0 / (z * z);
+            const double series = max(
+                1e-12,
+                1.0 - inv2 + 3.0 * inv2 * inv2 -
+                15.0 * inv2 * inv2 * inv2);
+
+            return -0.5 * z * z - log(z) -
+                logTwoPiHalf + log(series);
+        }
+
+        return log(max(
+            1e-300,
+            0.5 * erfc(-x / sqrtTwo)));
+    }
+
+    double smearedModelNll(
+        const array<double, 5>& p,
+        const vector<double>& centers,
+        const vector<double>& histogram,
+        double normalizedBinWidth)
+    {
+        const double alpha = p[0];
+        const double beta = p[1];
+        const double theta = p[2];
+        const double sigma = exp(p[3]);
+        const double logMass = p[4];
+
+        if (!isfinite(sigma) || sigma <= 0.0)
+            return numeric_limits<double>::max() / 4.0;
+
+        const double betaSigma2 = beta * sigma * sigma;
+        const double common = 0.5 * beta * beta * sigma * sigma;
+        const double logNorm = log(sigma) + 0.9189385332046727;
+
+        double nll = 0.0;
+
+        for (size_t i = 0; i < centers.size(); ++i)
+        {
+            const double u = centers[i];
+            const double z = (theta - u - betaSigma2) / sigma;
+
+            const double logContinuous = max(
+                -700.0,
+                min(700.0,
+                    alpha + beta * u + common + logNormalCdf(z)));
+
+            const double d = (u - theta) / sigma;
+            const double logBump =
+                logMass - logNorm - 0.5 * d * d;
+
+            const double continuous = exp(logContinuous);
+            const double bump = exp(max(-700.0, min(700.0, logBump)));
+            const double lambda = max(
+                1e-12,
+                (continuous + bump) * normalizedBinWidth);
+
+            nll += lambda - histogram[i] * log(lambda);
+
+            if (!isfinite(nll))
+                return numeric_limits<double>::max() / 4.0;
+        }
+
+        return nll;
+    }
+
+    array<double, 5> clampSmearedParameters(
+        array<double, 5> p,
+        const array<double, 5>& lower,
+        const array<double, 5>& upper)
+    {
+        for (size_t i = 0; i < p.size(); ++i)
+            p[i] = max(lower[i], min(upper[i], p[i]));
+
+        return p;
+    }
+
+    struct SmearedFitPoint
+    {
+        array<double, 5> p{};
+        double value = numeric_limits<double>::max();
+    };
+
+    SmearedFitPoint optimizeSmearedFit(
+        const array<double, 5>& initial,
+        const array<double, 5>& lower,
+        const array<double, 5>& upper,
+        const vector<double>& centers,
+        const vector<double>& histogram,
+        double normalizedBinWidth)
+    {
+        const array<double, 5> steps = {
+            0.2, 0.2, 0.01, 0.3, 0.5
+        };
+
+        array<SmearedFitPoint, 6> simplex{};
+
+        simplex[0].p = clampSmearedParameters(initial, lower, upper);
+
+        for (size_t i = 0; i < 5; ++i)
+        {
+            simplex[i + 1].p = simplex[0].p;
+            simplex[i + 1].p[i] += steps[i];
+            simplex[i + 1].p =
+                clampSmearedParameters(simplex[i + 1].p, lower, upper);
+        }
+
+        auto evaluate = [&](SmearedFitPoint& point)
+            {
+                point.value = smearedModelNll(
+                    point.p, centers, histogram, normalizedBinWidth);
+            };
+
+        for (SmearedFitPoint& point : simplex)
+            evaluate(point);
+
+        for (int iteration = 0; iteration < 350; ++iteration)
+        {
+            sort(
+                simplex.begin(),
+                simplex.end(),
+                [](const SmearedFitPoint& a, const SmearedFitPoint& b)
+                {
+                    return a.value < b.value;
+                });
+
+            double valueSpread = simplex.back().value - simplex.front().value;
+            double parameterSpread = 0.0;
+
+            for (size_t i = 1; i < simplex.size(); ++i)
+            {
+                for (size_t j = 0; j < 5; ++j)
+                {
+                    parameterSpread = max(
+                        parameterSpread,
+                        abs(simplex[i].p[j] - simplex[0].p[j]));
+                }
+            }
+
+            if (valueSpread < 1e-7 && parameterSpread < 1e-5)
+                break;
+
+            array<double, 5> centroid{};
+
+            for (size_t i = 0; i < 5; ++i)
+                for (size_t j = 0; j < 5; ++j)
+                    centroid[j] += simplex[i].p[j] / 5.0;
+
+            array<double, 5> reflected{};
+            for (size_t j = 0; j < 5; ++j)
+                reflected[j] = centroid[j] +
+                    (centroid[j] - simplex[5].p[j]);
+
+            SmearedFitPoint reflection;
+            reflection.p =
+                clampSmearedParameters(reflected, lower, upper);
+            evaluate(reflection);
+
+            if (reflection.value < simplex[0].value)
+            {
+                array<double, 5> expanded{};
+                for (size_t j = 0; j < 5; ++j)
+                    expanded[j] = centroid[j] +
+                        2.0 * (reflection.p[j] - centroid[j]);
+
+                SmearedFitPoint expansion;
+                expansion.p =
+                    clampSmearedParameters(expanded, lower, upper);
+                evaluate(expansion);
+
+                simplex[5] =
+                    expansion.value < reflection.value
+                    ? expansion : reflection;
+            }
+            else if (reflection.value < simplex[4].value)
+            {
+                simplex[5] = reflection;
+            }
+            else
+            {
+                const bool outside =
+                    reflection.value < simplex[5].value;
+
+                array<double, 5> contracted{};
+
+                for (size_t j = 0; j < 5; ++j)
+                {
+                    contracted[j] = outside
+                        ? centroid[j] + 0.5 * (reflection.p[j] - centroid[j])
+                        : centroid[j] + 0.5 * (simplex[5].p[j] - centroid[j]);
+                }
+
+                SmearedFitPoint contraction;
+                contraction.p =
+                    clampSmearedParameters(contracted, lower, upper);
+                evaluate(contraction);
+
+                if (contraction.value <
+                    (outside ? reflection.value : simplex[5].value))
+                {
+                    simplex[5] = contraction;
+                }
+                else
+                {
+                    for (size_t i = 1; i < simplex.size(); ++i)
+                    {
+                        for (size_t j = 0; j < 5; ++j)
+                        {
+                            simplex[i].p[j] = simplex[0].p[j] +
+                                0.5 * (simplex[i].p[j] - simplex[0].p[j]);
+                        }
+
+                        simplex[i].p =
+                            clampSmearedParameters(simplex[i].p, lower, upper);
+                        evaluate(simplex[i]);
+                    }
+                }
+            }
+        }
+
+        sort(
+            simplex.begin(),
+            simplex.end(),
+            [](const SmearedFitPoint& a, const SmearedFitPoint& b)
+            {
+                return a.value < b.value;
+            });
+
+        return simplex.front();
+    }
+
+    SmearedFit fitSmearedCeiling(
+        const vector<float>& interleavedSamples,
+        size_t channels,
+        size_t channel,
+        int polarity,
+        unsigned int sampleRate)
+    {
+        vector<double> values;
+        values.reserve(interleavedSamples.size() / max<size_t>(channels, 1));
+
+        for (size_t i = channel; i < interleavedSamples.size(); i += channels)
+        {
+            const double value =
+                polarity * static_cast<double>(interleavedSamples[i]);
+
+            if (value > 0.0 && isfinite(value))
+                values.push_back(value);
+        }
+
+        SmearedFit result;
+
+        if (values.size() < 2000)
+            return result;
+
+        const size_t discard =
+            static_cast<size_t>(floor(values.size() * 1e-5));
+        const size_t peakIndex = values.size() - 1 - discard;
+
+        nth_element(
+            values.begin(),
+            values.begin() + peakIndex,
+            values.end());
+
+        const double peak = values[peakIndex];
+
+        if (!(peak > 0.0) || !isfinite(peak))
+            return result;
+
+        const double loFraction = 0.45;
+        const double lo = loFraction * peak;
+        const double lsb = 1e-7;
+        const double binWidth = max((peak - lo) / 600.0, lsb);
+        const size_t binCount = max<size_t>(
+            1,
+            static_cast<size_t>(ceil((peak - lo) / binWidth)));
+
+        vector<double> histogram(binCount, 0.0);
+
+        for (double value : values)
+        {
+            if (value < lo || value > peak)
+                continue;
+
+            size_t index = static_cast<size_t>((value - lo) / binWidth);
+
+            if (index >= binCount)
+                index = binCount - 1;
+
+            histogram[index] += 1.0;
+        }
+
+        const double normalizedBinWidth = binWidth / peak;
+        vector<double> centers(binCount);
+        vector<double> smoothed(binCount, 0.0);
+
+        for (size_t i = 0; i < binCount; ++i)
+        {
+            centers[i] = (lo + (static_cast<double>(i) + 0.5) * binWidth) / peak;
+
+            double sum = 0.0;
+            for (int offset = -2; offset <= 2; ++offset)
+            {
+                const long long index =
+                    static_cast<long long>(i) + offset;
+
+                if (index >= 0 &&
+                    index < static_cast<long long>(binCount))
+                {
+                    sum += histogram[static_cast<size_t>(index)];
+                }
+            }
+
+            smoothed[i] = sum / 5.0;
+        }
+
+        double sumX = 0.0;
+        double sumY = 0.0;
+        double sumXX = 0.0;
+        double sumXY = 0.0;
+        size_t selected = 0;
+
+        const double fitUpper = 0.5 * (loFraction + 1.0);
+
+        for (size_t i = 0; i < binCount; ++i)
+        {
+            if (centers[i] >= fitUpper || histogram[i] <= 0.0)
+                continue;
+
+            const double x = centers[i];
+            const double y = log(histogram[i] / normalizedBinWidth);
+
+            sumX += x;
+            sumY += y;
+            sumXX += x * x;
+            sumXY += x * y;
+            ++selected;
+        }
+
+        double beta = 0.0;
+        double alpha = log(max(
+            accumulate(histogram.begin(), histogram.end(), 0.0) /
+            max<size_t>(binCount, 1) / normalizedBinWidth,
+            1.0));
+
+        if (selected > 5)
+        {
+            const double denominator =
+                selected * sumXX - sumX * sumX;
+
+            if (abs(denominator) > 1e-12)
+            {
+                beta = (selected * sumXY - sumX * sumY) /
+                    denominator;
+                alpha = (sumY - beta * sumX) / selected;
+            }
+        }
+
+        beta = min(beta, 0.0);
+
+        vector<double> trend(binCount);
+        vector<double> candidates;
+
+        size_t maxRatioIndex = 0;
+        double maxRatio = -1.0;
+
+        size_t minGradientIndex = 0;
+        double minGradient = numeric_limits<double>::max();
+
+        for (size_t i = 0; i < binCount; ++i)
+        {
+            trend[i] = exp(max(
+                -700.0,
+                min(700.0, alpha + beta * centers[i]))) *
+                normalizedBinWidth;
+
+            const double ratio =
+                smoothed[i] / max(trend[i], 1e-9);
+
+            if (ratio > maxRatio)
+            {
+                maxRatio = ratio;
+                maxRatioIndex = i;
+            }
+
+            if (i + 3 < binCount)
+            {
+                const double left = log(max(smoothed[i], 0.5));
+                const double right = log(max(smoothed[i + 1], 0.5));
+                const double gradient = right - left;
+
+                if (gradient < minGradient)
+                {
+                    minGradient = gradient;
+                    minGradientIndex = i;
+                }
+            }
+        }
+
+        candidates.push_back(centers[maxRatioIndex]);
+        candidates.push_back(centers[minGradientIndex]);
+        candidates.push_back(1.0 - 2.0 * normalizedBinWidth);
+
+        const double minSigma = max(
+            normalizedBinWidth * 0.25,
+            1e-6);
+
+        const array<double, 5> lower = {
+            -100.0,
+            -200.0,
+            loFraction,
+            log(minSigma),
+            log(1e-3)
+        };
+
+        const array<double, 5> upper = {
+            100.0,
+            50.0,
+            1.05,
+            log(0.2),
+            log(static_cast<double>(values.size()))
+        };
+
+        vector<SmearedFitPoint> starts;
+
+        for (double theta0 : candidates)
+        {
+            for (double sigma0 : { 0.003, 0.01, 0.03 })
+            {
+                double excess = 0.0;
+
+                for (size_t i = 0; i < binCount; ++i)
+                {
+                    if (abs(centers[i] - theta0) <
+                        3.0 * sigma0 + 2.0 * normalizedBinWidth)
+                    {
+                        excess += max(histogram[i] - trend[i], 0.0);
+                    }
+                }
+
+                excess = max(excess, 1.0);
+
+                array<double, 5> initial = {
+                    alpha,
+                    min(beta, 5.0),
+                    theta0,
+                    log(sigma0),
+                    log(excess)
+                };
+
+                SmearedFitPoint point;
+                point.p = clampSmearedParameters(initial, lower, upper);
+                point.value = smearedModelNll(
+                    point.p, centers, histogram, normalizedBinWidth);
+                starts.push_back(point);
+            }
+        }
+
+        sort(
+            starts.begin(),
+            starts.end(),
+            [](const SmearedFitPoint& a, const SmearedFitPoint& b)
+            {
+                return a.value < b.value;
+            });
+
+        SmearedFitPoint best;
+        const size_t startCount = min<size_t>(3, starts.size());
+
+        for (size_t i = 0; i < startCount; ++i)
+        {
+            SmearedFitPoint fitted = optimizeSmearedFit(
+                starts[i].p,
+                lower,
+                upper,
+                centers,
+                histogram,
+                normalizedBinWidth);
+
+            if (fitted.value < best.value)
+                best = fitted;
+        }
+
+        const double theta = best.p[2] * peak;
+        const double sigma = exp(best.p[3]) * peak;
+        const double mass = exp(best.p[4]);
+        const double background = exp(max(
+            -700.0,
+            min(700.0, best.p[0] + best.p[1] * best.p[2])));
+
+        result.valid =
+            isfinite(theta) && isfinite(sigma) &&
+            theta > 0.0 && sigma > 0.0;
+
+        if (result.valid)
+        {
+            result.peak = peak;
+            result.theta = theta;
+            result.sigma = sigma;
+            result.bumpRatio = mass / max(
+                background * exp(best.p[3]) *
+                2.5066282746310002,
+                1e-12);
+        }
+
+        return result;
+    }
+
+    uint64_t countTouchEvents(
+        const vector<float>& samples,
+        size_t channels,
+        size_t channel,
+        int polarity,
+        double threshold)
+    {
+        uint64_t events = 0;
+        bool previous = false;
+
+        for (size_t i = channel; i < samples.size(); i += channels)
+        {
+            const bool current =
+                polarity * static_cast<double>(samples[i]) >= threshold;
+
+            if (current && !previous)
+                ++events;
+
+            previous = current;
+        }
+
+        return events;
+    }
+}
+
+
 const double SMOOTHING_SIGMA = 1.0 / 6.0;
 const double SMOOTHING_RADIUS = 0.5;
 const double REFERENCE_FREQUENCY = 1000.0;
