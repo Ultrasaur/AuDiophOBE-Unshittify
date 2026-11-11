@@ -584,82 +584,99 @@ namespace
             }
         }
 
-        // Этап 2b. Дополнительный поиск с допуском одного
-        // отличающегося бита, но сразу по трём частичным сигнатурам.
-        // Две из трёх сигнатур должны совпадать точно, а третья
-        // может отличаться на один бит. Это значительно строже,
-        // чем поиск по одной близкой сигнатуре.
-        const size_t partTriples[4][3] =
+        // Этап 2b. Дополнительный поиск внутри больших групп.
+        // Первая частичная сигнатура должна совпадать точно,
+        // вторая может отличаться ровно одним битом.
+        // Это помогает находить повторы, пропущенные из-за
+        // небольших различий формы сигнала в одной части фрагмента.
+        const size_t partPairs[6][2] =
         {
-            { 1, 2, 3 },
-            { 0, 2, 3 },
-            { 0, 1, 3 },
-            { 0, 1, 2 }
+            { 0, 1 },
+            { 0, 2 },
+            { 0, 3 },
+            { 1, 2 },
+            { 1, 3 },
+            { 2, 3 }
         };
 
-        for (size_t tripleIndex = 0; tripleIndex < 4; ++tripleIndex)
+        constexpr size_t maxAdditionalCandidates = 1000000;
+        size_t additionalCandidates = 0;
+
+        for (size_t pairIndex = 0;
+            pairIndex < 6 &&
+            additionalCandidates < maxAdditionalCandidates;
+            ++pairIndex)
         {
-            std::unordered_map<uint64_t, std::vector<size_t>> tripleBuckets;
+            const size_t partA = partPairs[pairIndex][0];
+            const size_t partB = partPairs[pairIndex][1];
 
-            // Индексируем все фрагменты по трём выбранным сигнатурам.
+            // Сначала объединяем фрагменты с одинаковой первой сигнатурой.
+            std::unordered_map<uint16_t, std::vector<const FrameData*>> primaryBuckets;
+
             for (const FrameData& data : frameData)
+                primaryBuckets[data.signatures[partA]].push_back(&data);
+
+            for (const auto& primaryEntry : primaryBuckets)
             {
-                uint64_t key = 0;
+                const std::vector<const FrameData*>& primaryPositions =
+                    primaryEntry.second;
 
-                for (size_t i = 0; i < 3; ++i)
+                // Ищем дополнительные пары только там, где обычная
+                // проверка одной сигнатуры уже столкнулась с большой группой.
+                if (primaryPositions.size() <= maxBucketSize)
+                    continue;
+
+                std::unordered_map<uint16_t, std::vector<size_t>> secondaryBuckets;
+
+                for (const FrameData* data : primaryPositions)
+                    secondaryBuckets[data->signatures[partB]].push_back(data->frame);
+
+                // Для каждого фрагмента проверяем 16 соседних сигнатур,
+                // каждая из которых отличается ровно одним битом.
+                for (const FrameData* data : primaryPositions)
                 {
-                    key |= static_cast<uint64_t>(
-                        data.signatures[partTriples[tripleIndex][i]])
-                        << (i * 16);
-                }
-
-                tripleBuckets[key].push_back(data.frame);
-            }
-
-            // Для каждого фрагмента проверяем соседние ключи,
-            // отличающиеся ровно одним битом в одной сигнатуре.
-            for (const FrameData& data : frameData)
-            {
-                uint64_t key = 0;
-
-                for (size_t i = 0; i < 3; ++i)
-                {
-                    key |= static_cast<uint64_t>(
-                        data.signatures[partTriples[tripleIndex][i]])
-                        << (i * 16);
-                }
-
-                for (size_t signatureIndex = 0;
-                    signatureIndex < 3;
-                    ++signatureIndex)
-                {
-                    for (unsigned int bit = 0; bit < 16; ++bit)
+                    for (unsigned int bit = 0;
+                        bit < 16 &&
+                        additionalCandidates < maxAdditionalCandidates;
+                        ++bit)
                     {
-                        const uint64_t neighborKey =
-                            key ^ (uint64_t(1) << (signatureIndex * 16 + bit));
+                        const uint16_t neighborKey =
+                            static_cast<uint16_t>(
+                                data->signatures[partB] ^ (uint16_t(1) << bit));
 
-                        auto bucketIt = tripleBuckets.find(neighborKey);
+                        auto bucketIt = secondaryBuckets.find(neighborKey);
 
-                        if (bucketIt == tripleBuckets.end())
+                        if (bucketIt == secondaryBuckets.end())
                             continue;
 
                         const std::vector<size_t>& positions = bucketIt->second;
 
+                        // Не допускаем чрезмерно большие группы совпадений.
                         if (positions.size() > maxBucketSize)
                             continue;
 
                         for (size_t other : positions)
                         {
-                            if (other <= data.frame)
+                            if (other <= data->frame)
                                 continue;
 
-                            if (other - data.frame < windowFrames)
+                            if (other - data->frame < windowFrames)
                                 continue;
 
-                            candidates.push_back({ data.frame, other });
+                            candidates.push_back({ data->frame, other });
+                            ++additionalCandidates;
+
+                            if (additionalCandidates >= maxAdditionalCandidates)
+                                break;
                         }
                     }
+
+                    if (additionalCandidates >= maxAdditionalCandidates)
+                        break;
                 }
+
+                if (additionalCandidates >= maxAdditionalCandidates)
+                    break;
             }
         }
 
