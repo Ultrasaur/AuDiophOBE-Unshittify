@@ -121,6 +121,15 @@ struct DeclipResult
     std::uint64_t legacyTooLongRuns = 0;
     std::uint64_t legacyEdgeRuns = 0;
     std::uint64_t legacyShortRuns = 0;
+    std::uint64_t legacyCandidateLen1 = 0;
+    std::uint64_t legacyCandidateLen2 = 0;
+    std::uint64_t legacyCandidateLen3To4 = 0;
+    std::uint64_t legacyCandidateLen5To8 = 0;
+    std::uint64_t legacyCandidateLen9Plus = 0;
+    std::uint64_t legacyShortPeakBelow90 = 0;
+    std::uint64_t legacyShortPeak90To98 = 0;
+    std::uint64_t legacyShortPeak98To999 = 0;
+    std::uint64_t legacyShortPeak999Plus = 0;
     std::uint64_t legacySkippedRuns = 0;
     std::vector<DeclipSegment> segments;
 };
