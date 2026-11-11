@@ -1569,7 +1569,6 @@ DeclipResult declipAudio(
                 };
 
                 bool componentClips = false;
-                double commonScale = 1.0;
 
                 for (size_t i = 0; i < group.length; ++i)
                 {
@@ -1595,9 +1594,6 @@ DeclipResult declipAudio(
                             abs(predicted) > limit * (1.0 + CLIP_TOLERANCE))
                         {
                             componentClips = true;
-                            commonScale = min(
-                                commonScale,
-                                limit / max(abs(predicted), 1e-12));
                         }
                     }
                 }
@@ -1615,7 +1611,7 @@ DeclipResult declipAudio(
                                 (reference.start + i) * channels + ch] /
                                 referenceGains[ch];
                             const double reconstructed =
-                                base * targetGains[ch] * commonScale;
+                                base * targetGains[ch];
                             const size_t index = frame * channels + ch;
 
                             audio.samples[index] =
