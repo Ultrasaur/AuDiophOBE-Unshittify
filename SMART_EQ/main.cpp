@@ -840,7 +840,7 @@ int main()
             // Восстановление срезанных пиков (опционально, до анализа спектра)
             if (settings.declip)
             {
-                progress.update(index, 5, L"Restoring peaks", job.input);
+                progress.update(index, 5, L"Finding repeated components", job.input);
 
                 // Копия исходного аудио нужна только для графика сравнения
                 AudioData originalAudio = audio;
@@ -868,6 +868,8 @@ int main()
                         << repetitions.occurrences << L" occurrences";
                     progress.note(repetitionInfo.str());
                 }
+
+                progress.update(index, 5, L"Restoring peaks", job.input);
 
                 DeclipResult declip = declipAudio(
                     audio,
