@@ -614,6 +614,8 @@ static double optimizeRepeatedGroup(
     const double wr = clamp(repeatedPriorityPercent / 100.0, 0.0, 1.0);
     const double ws = 1.0 - wr;
     const double minimumGain = 1e-4;
+    // Leave a tiny numerical margin for float multiplication and summation.
+    const double safeCeiling = ceiling * (1.0 - 1e-6);
     const size_t radius = static_cast<size_t>(max(
         0.0, round(smoothingMs * 0.0005 * repeated.sampleRate)));
 
@@ -644,13 +646,13 @@ static double optimizeRepeatedGroup(
 
                 if (abs(b) < 1e-15)
                 {
-                    if (abs(a) > ceiling)
+                    if (abs(a) > safeCeiling)
                         return numeric_limits<double>::infinity();
                     continue;
                 }
 
-                const double x1 = (-ceiling - a) / b;
-                const double x2 = ( ceiling - a) / b;
+                const double x1 = (-safeCeiling - a) / b;
+                const double x2 = ( safeCeiling - a) / b;
                 lower = max(lower, min(x1, x2));
                 upper = min(upper, max(x1, x2));
             }
@@ -658,7 +660,7 @@ static double optimizeRepeatedGroup(
             lower = max(lower, 0.0);
             upper = min(upper, 1.0);
 
-            if (lower > upper + 1e-12)
+            if (lower > upper)
                 return numeric_limits<double>::infinity();
 
             lowerBounds[f] = lower;
