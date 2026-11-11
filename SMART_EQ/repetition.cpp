@@ -10,6 +10,7 @@
 #include <map>
 #include <iterator>
 #include <array>
+#include <iostream>
 
 namespace
 {
@@ -166,7 +167,9 @@ namespace
         int& bestOffset,
         double& gainLeft,
         double& gainRight,
-        double& bestScore)
+        double& bestScore,
+        size_t& coarsePasses,
+        size_t& fullPasses)
     {
         const size_t shiftStep =
             std::max<size_t>(1, audio.sampleRate / 8000);
@@ -197,6 +200,8 @@ namespace
             {
                 continue;
             }
+
+            ++coarsePasses;
 
             double dot[2] = {};
             double energyA[2] = {};
@@ -266,6 +271,7 @@ namespace
             if (!valid)
                 continue;
 
+            ++fullPasses;
             score /= audio.channels;
 
             if (score > bestScore)
@@ -350,7 +356,8 @@ namespace
     std::vector<CandidatePair> findCandidates(
         const AudioData& audio,
         size_t windowFrames,
-        size_t hopFrames)
+        size_t hopFrames,
+        size_t& eligibleFrames)
     {
         constexpr size_t maxBucketSize = 256;
 
@@ -414,6 +421,8 @@ namespace
 
             frameData.push_back(data);
         }
+
+        eligibleFrames = frameData.size();
 
         std::vector<CandidatePair> candidates;
 
@@ -610,6 +619,12 @@ bool separateRepeatedComponents(
     );
 
 
+    // Временная диагностика поиска.
+    size_t totalEligibleFrames = 0;
+    size_t totalCandidates = 0;
+    size_t totalCoarsePasses = 0;
+    size_t totalFullPasses = 0;
+
     // Этап 1. Собираем все подтверждённые совпадения.
     // Пока ничего не помечаем занятым.
     std::map<size_t, std::vector<Match>> matchesByLength;
@@ -620,8 +635,12 @@ bool separateRepeatedComponents(
             windowFrames >= input.frameCount)
             continue;
 
+        size_t eligibleFrames = 0;
         std::vector<CandidatePair> candidates =
-            findCandidates(input, windowFrames, hopFrames);
+            findCandidates(input, windowFrames, hopFrames, eligibleFrames);
+
+        totalEligibleFrames += eligibleFrames;
+        totalCandidates += candidates.size();
 
         const size_t maxShift =
             std::max<size_t>(1, hopFrames / 2);
@@ -632,6 +651,8 @@ bool separateRepeatedComponents(
             double gainLeft = 1.0;
             double gainRight = 1.0;
             double score = 0.0;
+            size_t coarsePasses = 0;
+            size_t fullPasses = 0;
 
             if (!compareFragments(
                 input,
@@ -643,10 +664,17 @@ bool separateRepeatedComponents(
                 offset,
                 gainLeft,
                 gainRight,
-                score))
+                score,
+                coarsePasses,
+                fullPasses))
             {
+                totalCoarsePasses += coarsePasses;
+                totalFullPasses += fullPasses;
                 continue;
             }
+
+            totalCoarsePasses += coarsePasses;
+            totalFullPasses += fullPasses;
 
             long long aligned =
                 static_cast<long long>(candidate.second) + offset;
@@ -875,6 +903,15 @@ bool separateRepeatedComponents(
             result.occurrences += group.size();
         }
     }
+
+    std::cerr
+        << "\\n[Repetition diagnostics]\\n"
+        << "Eligible frames: " << totalEligibleFrames << "\\n"
+        << "Candidate pairs: " << totalCandidates << "\\n"
+        << "Coarse comparisons passed: " << totalCoarsePasses << "\\n"
+        << "Full comparisons passed: " << totalFullPasses << "\\n"
+        << "Accepted groups: " << result.groups << "\\n"
+        << "Accepted occurrences: " << result.occurrences << "\\n";
 
     // Поэтому сумма выходов восстанавливает исходный сигнал.
     for (size_t i = 0; i < input.samples.size(); ++i)
