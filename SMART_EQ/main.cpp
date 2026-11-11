@@ -1270,6 +1270,32 @@ int main()
                         << declip.legacyShortPeak999Plus;
                     progress.note(L"[Diagnostics] " +
                         job.input.filename().wstring() + L" | " + info.str());
+
+                    for (const SmearedCeilingDiagnostic& fit :
+                        declip.smearedCeilings)
+                    {
+                        const double thetaDb =
+                            20.0 * log10(max(fit.theta, 1e-12));
+                        const double kneeDb =
+                            20.0 * log10(max(fit.knee, 1e-12));
+                        const double sigmaPercent =
+                            100.0 * fit.sigma / max(fit.theta, 1e-12);
+
+                        wostringstream fitInfo;
+                        fitInfo << fixed << setprecision(3)
+                            << L"[Smeared ceiling fit] Channel "
+                            << (fit.channel + 1)
+                            << (fit.polarity > 0 ? L" positive" : L" negative")
+                            << L" | theta " << thetaDb << L" dBFS"
+                            << L" | sigma/theta " << sigmaPercent << L"%"
+                            << L" | knee(theta-6*sigma) " << kneeDb << L" dBFS"
+                            << L" | bump ratio " << fit.bumpRatio
+                            << L" | touch events " << fit.touchEvents
+                            << L" | smeared evidence "
+                            << (fit.smearedEvidence ? L"yes" : L"no");
+
+                        progress.note(fitInfo.str());
+                    }
                 }
 
                 const bool hasRepeatedGroups =
