@@ -17,6 +17,7 @@
 #include <atomic>
 #include <cstdlib>
 #include <cmath>
+#include <utility>
 
 #include "audio.h"
 #include "fft.h"
@@ -907,7 +908,7 @@ int main()
 
                 if (hasRepeatedGroups)
                 {
-                    repeatedProcessed = repeatedComponents;
+                    repeatedProcessed = std::move(repeatedComponents);
 
                     for (const RepetitionGroup& group : repetitions.groupDetails)
                     {
