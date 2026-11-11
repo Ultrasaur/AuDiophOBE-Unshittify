@@ -1271,6 +1271,46 @@ int main()
                     progress.note(L"[Diagnostics] " +
                         job.input.filename().wstring() + L" | " + info.str());
 
+
+                    for (size_t channel = 0;
+                        channel < declip.betterDetection.channels.size();
+                        ++channel)
+                    {
+                        const auto printDetection = [&](const BetterDeclipper::PolarityAnalysis& side)
+                        {
+                            const wchar_t* kind =
+                                side.kind == BetterDeclipper::CeilingKind::HardClip ? L"hard clip" :
+                                side.kind == BetterDeclipper::CeilingKind::Limiter ? L"limiter" :
+                                side.kind == BetterDeclipper::CeilingKind::Smeared ? L"smeared" : L"none";
+
+                            wostringstream detectionInfo;
+                            detectionInfo << fixed << setprecision(4)
+                                << L"[BetterDeclipper detection] Channel " << (channel + 1)
+                                << (side.polarity > 0 ? L" positive" : L" negative")
+                                << L" | kind " << kind
+                                << L" | plateau ";
+                            if (side.plateauLevel)
+                                detectionInfo << 20.0 * log10(max(*side.plateauLevel, 1e-12)) << L" dBFS";
+                            else
+                                detectionInfo << L"none";
+                            detectionInfo
+                                << L" | soft knee ";
+                            if (side.softKnee)
+                                detectionInfo << 20.0 * log10(max(*side.softKnee, 1e-12)) << L" dBFS";
+                            else
+                                detectionInfo << L"none";
+                            detectionInfo
+                                << L" | long-run fraction " << side.longRunFraction
+                                << L" | flat-step fraction " << side.flatStepFraction
+                                << L" | touch events " << side.touchEvents
+                                << L" | plateau samples " << side.samplesAtPlateau;
+                            progress.note(detectionInfo.str());
+                        };
+
+                        printDetection(declip.betterDetection.channels[channel].positive);
+                        printDetection(declip.betterDetection.channels[channel].negative);
+                    }
+
                     for (const SmearedCeilingDiagnostic& fit :
                         declip.smearedCeilings)
                     {
