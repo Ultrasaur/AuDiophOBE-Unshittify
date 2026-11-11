@@ -848,6 +848,10 @@ int main()
                 return false;
             }
 
+            AudioData repeatedComponents;
+            AudioData residualAudio;
+            AudioData repeatedProcessed;
+
             // Восстановление срезанных пиков (опционально, до анализа спектра)
             if (settings.declip)
             {
@@ -856,8 +860,6 @@ int main()
                 // Копия исходного аудио нужна только для графика сравнения
                 AudioData originalAudio = audio;
 
-                AudioData repeatedComponents;
-                AudioData residualAudio;
                 RepetitionResult repetitions;
                 RepetitionSettings repetitionSettings;
                 string repetitionError;
@@ -902,7 +904,6 @@ int main()
                     repetitionReady && repetitions.groups > 0 &&
                     !repetitions.groupDetails.empty();
 
-                AudioData repeatedProcessed;
                 vector<uint8_t> repeatedFrames(
                     static_cast<size_t>(audio.frameCount), 0);
 
