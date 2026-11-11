@@ -2069,6 +2069,12 @@ PeakReductionPlan planPeakReduction(
                 if (residualContribution <= 0.0)
                     continue;
 
+                // If the fixed repeated component alone reaches the ceiling,
+                // attenuating the residual cannot solve the peak; group gain
+                // control handles that case later.
+                if (direction * fixed >= ceiling)
+                    continue;
+
                 const double allowedResidual = ceiling - direction * fixed;
                 const double gain = min(1.0,
                     max(0.0, allowedResidual / residualContribution));
@@ -2894,6 +2900,15 @@ BandReductionPlan planBandReduction(
                     }
 
                     const double direction = y > 0.0 ? 1.0 : -1.0;
+                    const double fixedValue = hasFixedComponents
+                        ? fixedComponents->samples[
+                            (c0 + i) * channels + channel]
+                        : 0.0;
+
+                    // Do not attenuate the residual to compensate for a
+                    // repeated component that already exceeds the ceiling.
+                    if (direction * fixedValue >= ceiling)
+                        continue;
 
                     double contribution[BAND_COUNT];
                     double cubes = 0.0;
@@ -3849,7 +3864,7 @@ bool saveBandReductionGraph(
 
         caption << fixed << setprecision(0)
             << "Gain reduction by band, Hz (each lane: 0 to -"
-            << depthMax << " dB)";
+            << depthMax << " dB; residual only, repeated components excluded)";
 
         file << "<text x=\"" << MARGIN_LEFT << "\" y=\"" << lanesTop - 10.0
             << "\" fill=\"#222222\" font-weight=\"bold\">"
