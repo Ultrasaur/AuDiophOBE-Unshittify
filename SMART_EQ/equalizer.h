@@ -205,6 +205,12 @@ struct BandReductionPlan
     std::vector<Chunk> chunks;
     std::uint64_t affectedFrames = 0;           // кадры, в которых снижена хотя бы одна полоса
     std::vector<double> maxReductionDb;         // наибольшее снижение по полосам, dB (<= 0)
+    std::vector<std::uint64_t> affectedFramesByBand;
+    std::vector<std::uint64_t> framesReducedAtLeast3Db;
+    std::vector<std::uint64_t> framesReducedAtLeast6Db;
+    std::vector<std::uint64_t> framesReducedAtLeast12Db;
+    std::vector<std::uint64_t> framesAtReductionLimit;
+    std::vector<double> sumReductionDb;
     std::vector<std::vector<float>> columnGainDb;  // [полоса][столбец графика], dB
 
     // Самое сильное событие (первый канал): фрагмент до и после снижения
